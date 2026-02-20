@@ -32,3 +32,10 @@ __pycache__/
 # ========================
 .DS_Store
 Thumbs.db
+
+# ========================
+# # 5. Tool Caches & Hidden Dirs
+# # ========================
+WF/.java/
+WF/.cache/
+
