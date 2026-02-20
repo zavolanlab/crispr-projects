@@ -1,0 +1,10 @@
+---
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - r-dplyr
+  - r-stringr
+  - r-data.table
+  - bioconductor-deseq2
+  - bioconductor-apeglm

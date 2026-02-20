@@ -1,0 +1,11 @@
+executor: slurm
+jobs: 100
+cores: 500
+local-cores: 10
+latency-wait: 60
+default-resources:
+    slurm_account:   "zavolan"
+    mem_mb: 40000
+    slurm_partition: "scicore"
+    runtime: 360
+    slurm_extra: "'--qos=1day'"

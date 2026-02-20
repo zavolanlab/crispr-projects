@@ -1,0 +1,437 @@
+import os
+import pandas as pd
+import shutil
+import yaml
+from shlex import quote
+from typing import Tuple
+from snakemake.utils import validate
+
+####
+# This is the first part of a large workflow, in which fastq files are downloaded / symbolically copied from another place on the cluster, mapped and fastqc'ed
+# Also, each .bam file is separated by chromosomes, and then the selection of low-duplicated reads is done, as well as coverages for PAQR are produced.
+####
+
+## Preparations
+localrules:  finish,get_fastq_files
+
+# Get sample table (contains duplicated control samples ! -> needed for differential analysis)
+samples = pd.read_csv(
+    config["samples_file"],
+    header=0,
+    index_col=None,
+    comment='#',
+    engine='python',
+    sep="\t")
+samples = samples.drop_duplicates('sample').reset_index(drop=True)
+samples.index = samples['sample']
+samples["paqr_condition"]="Unknown" # force one condition for PAQR quantification
+    
+rule finish:
+    input:
+        ###
+        # initial quality check
+        ###
+        fastqc_input = expand(os.path.join(
+            config["output_dir"],
+            "samples",
+            "{sample}",
+            "fastqc",
+            "0.input.{read_pair}"),
+        sample = list(samples.index.values),read_pair=['R1','R2']),
+        ###
+        # check quality of uniquely mapped reads
+        # forces alignment and selection of unique mappers
+        ###
+        fastqc_uniquely_mapped=expand(os.path.join(
+            config["output_dir"],
+            "samples",
+            "{sample}",
+            "fastqc",
+            "1.uniquely_mapped"),
+        sample = list(samples.index.values)),
+        ###
+        # make genomic coverage from mapped reads
+        ###
+        bigwig_plus = expand(os.path.join(
+                        config["output_dir"],
+                        "genomic_coverage",
+                        "{sample}.plus.bigwig"),
+        sample = list(samples.index.values)),
+
+rule get_fastq_files:
+    """
+        Download data from ENCODE, SRA, or make a symbomate_1lic link if the data is present on the cluster
+    """
+    output:
+        fastq_1=(os.path.join(
+            config["output_dir"],
+            "samples",
+            "{sample}",
+            "fastq",
+            "{sample}.R1.fastq.gz")),
+        fastq_2=(os.path.join(
+            config["output_dir"],
+            "samples",
+            "{sample}",
+            "fastq",
+            "{sample}.R2.fastq.gz")),
+    params:
+        path_1=lambda wildcards: samples.loc[wildcards.sample, "fq1"],
+        path_2=lambda wildcards: samples.loc[wildcards.sample, "fq2"],
+        data_source = lambda wildcards: samples.loc[wildcards.sample, "source"],
+        outdir = os.path.join(
+            config["output_dir"],
+            "samples",
+            "{sample}",
+            "fastq")
+    threads: 1
+    log:
+        os.path.join(config["local_log"],"download_fastq_files_from_ENCODE_{sample}.log")
+    shell:
+        """(set +o pipefail; mkdir -p {params.outdir}; \
+        if [[ {params.data_source} == "ENCODE" ]]; then \
+        wget -O {output.fastq_1} {params.path_1} && \
+        wget -O {output.fastq_2} {params.path_2}; \
+        elif [[ {params.data_source} == "CLUSTER" ]]; then \
+        rm -f {output.fastq_1} && ln -f -s {params.path_1} {output.fastq_1} && \
+        rm -f {output.fastq_2} && ln -f -s {params.path_2} {output.fastq_2}; fi) \
+        &> {log}"""
+
+
+rule fastqc_input_files:
+    """
+        A quality control tool for high throughput sequence data
+    """
+    input:
+        reads=os.path.join(
+            config["output_dir"],
+            "samples",
+            "{sample}",
+            "fastq",
+            "{sample}.{read_pair}.fastq.gz"),
+    output:
+        outdir=directory(os.path.join(
+            config["output_dir"],
+            "samples",
+            "{sample}",
+            "fastqc",
+            "0.input.{read_pair}")),
+    threads: 4
+    resources:
+        mem_mb=10000,
+        runtime=60,
+    singularity:
+        "docker://staphb/fastqc:0.12.1"
+    log:
+        os.path.join(config["local_log"],"fastqc_input_files__{sample}_{read_pair}.log"),
+    shell:
+        """(set +o pipefail; mkdir -p {output.outdir}; \
+        fastqc --outdir {output.outdir} \
+        --threads {threads} \
+        {input.reads}) \
+        &> {log}"""
+
+rule create_index_star_without_GTF:
+    """
+        Create index for STAR alignments without GTF
+    """
+    input:
+        genome=config["genome_file"],
+        gtf=config["gtf_file"],
+    output:
+        chromosome_info=os.path.join(
+            config["output_dir"],
+            "STAR_indices",
+            config["organism"],
+            "without_GTF",
+            "STAR_index",
+            "chrNameLength.txt",
+        ),
+        chromosomes_names=os.path.join(
+            config["output_dir"],
+            "STAR_indices",
+            config["organism"],
+            "without_GTF",
+            "STAR_index",
+            "chrName.txt",
+        ),
+    params:
+        output_dir=lambda wildcards, output: os.path.dirname(output.chromosome_info),
+        outFileNamePrefix=os.path.join(
+            config["output_dir"],"STAR_indices", config["organism"], "without_GTF", "STAR_index/STAR_"
+        ),
+    conda:
+        "envs/STAR.yaml"
+    threads: 12
+    log:
+        os.path.join(config["local_log"],"create_index_star.log"),
+    shell:
+        """(mkdir -p {params.output_dir}; \
+        STAR \
+        --runMode genomeGenerate \
+        --genomeDir {params.output_dir} \
+        --genomeFastaFiles {input.genome} \
+        --runThreadN {threads} \
+        --outFileNamePrefix {params.outFileNamePrefix}) \
+        &> {log}"""
+
+rule map_genome_star_pe:
+    """
+        Map to genome using STAR
+    """
+    input:
+        chromosome_info=os.path.join(config["output_dir"],"STAR_indices",config["organism"],"without_GTF","STAR_index","chrNameLength.txt"),
+        fastq_1=os.path.join(
+            config["output_dir"],
+            "samples",
+            "{sample}",
+            "fastq",
+            "{sample}.R1.fastq.gz"),
+        fastq_2=os.path.join(
+            config["output_dir"],
+            "samples",
+            "{sample}",
+            "fastq",
+            "{sample}.R2.fastq.gz"),
+    output:
+        bam=os.path.join(
+            config["output_dir"],
+            "samples",
+            "{sample}",
+            "map_genome",
+            "{sample}.Aligned.sortedByCoord.out.bam",
+        ),
+        log_final_file=os.path.join(
+            config["output_dir"],
+            "samples",
+            "{sample}",
+            "map_genome",
+            "{sample}.Log.final.out",
+        ),
+    params:
+        outFileNamePrefix=lambda wildcards, output: output.bam.replace(
+            "Aligned.sortedByCoord.out.bam", ""
+        ),
+        STAR_index=lambda wildcards, input: os.path.dirname(input.chromosome_info),
+    conda:
+        "envs/STAR.yaml"
+    resources:
+        mem_mb=70000,
+        runtime=300,
+    threads: 12
+    log:
+        os.path.join(config["local_log"],"map_genome_star_pe__{sample}.log")
+    shell:
+        """(STAR \
+        --runMode alignReads \
+        --alignEndsType Local \
+        --runThreadN {threads} \
+        --genomeDir {params.STAR_index} \
+        --readFilesIn {input.fastq_1} {input.fastq_2} \
+        --readFilesCommand zcat \
+        --outFileNamePrefix {params.outFileNamePrefix} \
+        --genomeLoad NoSharedMemory \
+        --outSAMtype BAM SortedByCoordinate \
+        --outFilterType BySJout \
+        --twopassMode None \
+        --outBAMsortingThreadN {threads} \
+        --outFilterMultimapNmax 500000000 \
+        --outSAMattrIHstart 0 \
+        --outSAMattributes All \
+        --limitOutSJcollapsed 5000000) \
+        &> {log}"""
+
+rule samtools_index_mapped:
+    """
+        index bam files
+    """
+    input:
+        bam=os.path.join(
+            config["output_dir"],
+            "samples",
+            "{sample}",
+            "map_genome",
+            "{sample}.Aligned.sortedByCoord.out.bam",
+        ),
+    output:
+        bai = os.path.join(
+            config["output_dir"],
+            "samples",
+            "{sample}",
+            "map_genome",
+            "{sample}.Aligned.sortedByCoord.out.bam.bai",
+        ),
+    conda:
+        "envs/samtools_latest.yaml"
+    threads: 12
+    resources:
+        mem_mb=20000,
+        runtime=60,
+    log:
+        os.path.join(config["local_log"],"samtools_index_mapped_{sample}.log")
+    shell:
+        """(samtools index -@ {threads} \
+        {input.bam}; ) &> {log}"""
+
+
+# Get only uniquely mapped reads
+
+rule get_uniquely_mapped_reads:
+    """
+        Get uniquely mapped reads
+    """
+    input:
+        bam=os.path.join(
+            config["output_dir"],
+            "samples",
+            "{sample}",
+            "map_genome",
+            "{sample}.Aligned.sortedByCoord.out.bam",
+        ),
+        bai=os.path.join(
+            config["output_dir"],
+            "samples",
+            "{sample}",
+            "map_genome",
+            "{sample}.Aligned.sortedByCoord.out.bam.bai",
+        ),
+    output:
+        bam_filtered=os.path.join(
+                        config["output_dir"],
+                        "samples",
+                        "{sample}",
+                        "map_genome",
+                        "{sample}.Aligned.sortedByCoord.uniquely_mapped.bam"),
+    params:
+        outdir = os.path.join(
+            config["output_dir"],
+            "samples",
+            "{sample}",
+            "map_genome"),
+    conda:
+        "envs/samtools_latest.yaml"
+    threads: 12
+    resources:
+        mem_mb=20000,
+        runtime=60,
+    log:
+        os.path.join(config["local_log"],"get_uniquely_mapped_reads_{sample}.log"),
+    shell:
+        """(set +o pipefail; mkdir -p {params.outdir}; \
+        samtools view -@ {threads} -h -q 255 -u {input.bam} | \
+        samtools sort -@ {threads} -o {output.bam_filtered}; \
+        samtools index -@ {threads} {output.bam_filtered}) \
+        &> {log}"""        
+
+rule fastqc_uniquely_mapped:
+    """
+        A quality control tool for high throughput sequence data
+    """
+    input:
+        reads = os.path.join(
+            config["output_dir"],
+            "samples",
+            "{sample}",
+            "map_genome",
+            "{sample}.Aligned.sortedByCoord.uniquely_mapped.bam"),
+    output:
+        outdir=directory(os.path.join(
+            config["output_dir"],
+            "samples",
+            "{sample}",
+            "fastqc",
+            "1.uniquely_mapped")), 
+    threads: 4
+    resources:
+        mem_mb=10000,
+        runtime=60,
+    singularity:
+        "docker://staphb/fastqc:0.12.1"
+    log:
+        os.path.join(config["local_log"],"fastqc_uniquely_mapped__{sample}.log")
+    shell:
+        """(set +o pipefail; mkdir -p {output.outdir}; \
+        fastqc --outdir {output.outdir} \
+        --threads {threads} \
+        {input.reads}) \
+        &> {log}"""
+
+
+rule make_stranded_coverage:
+    """
+        use samtools depth
+        only look at paired reads
+        rely on sam flags for strandedness
+    """
+    input:
+        bam=os.path.join(
+                        config["output_dir"],
+                        "samples",
+                        "{sample}",
+                        "map_genome",
+                        "{sample}.Aligned.sortedByCoord.uniquely_mapped.bam"),
+        chrom_sizes = config["chrom_sizes"]
+    output:
+        minus_bw = os.path.join(
+                        config["output_dir"],
+                        "genomic_coverage",
+                        "{sample}.minus.bigwig"),
+        plus_bw = os.path.join(
+                        config["output_dir"],
+                        "genomic_coverage",
+                        "{sample}.plus.bigwig"),
+    params:
+        outdir = os.path.join(
+            config["output_dir"],
+            "genomic_coverage"),
+    conda:
+        "envs/samtools_latest.yaml"
+    threads: 4
+    resources:
+        mem_mb=40000,
+        runtime=240,
+    log:
+        os.path.join(config["local_log"],"make_stranded_coverage_{sample}.log"),
+    shell:
+        """
+        set +o pipefail
+        mkdir -p {params.outdir}
+        
+        # Create an isolated temporary directory for this specific sample's run
+        TMPDIR=$(mktemp -d)
+        trap "rm -rf $TMPDIR" EXIT
+        
+        echo "Processing {wildcards.sample} (Raw depth)..." > {log}
+
+        # 1. Isolate strands (expects F2R1 library orientation)
+        # 1.1 gene is on positive strand
+        samtools view -b -f 81 {input.bam} > $TMPDIR/r1_rev.bam 2>> {log}
+        samtools view -b -f 129 -F 16 {input.bam} > $TMPDIR/r2_fwd.bam 2>> {log}
+        samtools merge -f -@ {threads} $TMPDIR/plus_strand.bam $TMPDIR/r1_rev.bam $TMPDIR/r2_fwd.bam 2>> {log}
+        echo "Isolated reads from genes on positive strand..." > {log}
+        
+        # 1.2 gene is on negative strand
+        samtools view -b -f 65 -F 16 {input.bam} > $TMPDIR/r1_fwd.bam 2>> {log}
+        samtools view -b -f 145 {input.bam} > $TMPDIR/r2_rev.bam 2>> {log}
+        samtools merge -f -@ {threads} $TMPDIR/minus_strand.bam $TMPDIR/r1_fwd.bam $TMPDIR/r2_rev.bam 2>> {log}
+        echo "Isolated reads from genes on negative strand..." > {log}
+        
+        # 2. Depth calculation, Chromosome Filtering, and Sorting
+        # The awk command reads {input.chrom_sizes} first, then the '-' tells it to read the samtools pipe.
+        samtools depth -s $TMPDIR/plus_strand.bam | \
+            awk -v OFS='\\t' 'NR==FNR {{valid_chroms[$1]=1; next}} $1 in valid_chroms {{print $1, $2-1, $2, $3}}' {input.chrom_sizes} - | \
+            LC_COLLATE=C sort -k1,1 -k2,2n > $TMPDIR/plus.bedgraph
+        
+        echo "Prepared sorted bedgraph for positive strand..." > {log}
+        
+        samtools depth -s $TMPDIR/minus_strand.bam | \
+            awk -v OFS='\\t' 'NR==FNR {{valid_chroms[$1]=1; next}} $1 in valid_chroms {{print $1, $2-1, $2, $3}}' {input.chrom_sizes} - | \
+            LC_COLLATE=C sort -k1,1 -k2,2n > $TMPDIR/minus.bedgraph
+
+        echo "Prepared sorted bedgraph for negative strand..." > {log}
+        
+        # 3. Convert to BigWig
+        bedGraphToBigWig $TMPDIR/plus.bedgraph {input.chrom_sizes} {output.plus_bw}
+        bedGraphToBigWig $TMPDIR/minus.bedgraph {input.chrom_sizes} {output.minus_bw}        
+        echo "Successfully generated BigWigs for {wildcards.sample}!" >> {log}
+        """

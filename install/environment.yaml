@@ -1,0 +1,33 @@
+name: crispr_projects
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  # Core Python & Jupyter
+  - python>=3.12
+  - jupyter
+  - ipykernel
+  - ipython
+
+  # Data Science & Stats
+  - pandas
+  - numpy
+  - scipy
+  - statsmodels
+  - scikit-learn
+  - umap-learn
+
+  # Plotting
+  - matplotlib
+  - seaborn
+  - pyqt  # Required for matplotlib.rcParams['backend'] = "Qt5Agg"
+  - adjusttext
+
+  # Bioinformatics
+  - htseq
+  - biopython
+
+  # Utilities
+  - python-dotenv
+  - ruamel.yaml

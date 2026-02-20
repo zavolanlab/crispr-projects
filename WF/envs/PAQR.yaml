@@ -1,0 +1,9 @@
+---
+channels:
+  - bioconda
+  - anaconda
+  - conda-forge
+dependencies:
+  - htseq
+  - numpy
+...
