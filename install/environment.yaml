@@ -31,3 +31,4 @@ dependencies:
   # Utilities
   - python-dotenv
   - ruamel.yaml
+  - conda-forge::nbstripout
