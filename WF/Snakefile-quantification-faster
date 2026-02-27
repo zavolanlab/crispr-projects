@@ -216,6 +216,7 @@ rule PAQ_create_coverages:
 # ##############################################################################
 
 rule FeatureCounts_exonic_segments:
+    ### we put UNSTRANDED read counting now, to match TCGA
     input:
         bam=os.path.join(
             config["output_dir"],
@@ -238,9 +239,10 @@ rule FeatureCounts_exonic_segments:
         os.path.join(config["local_log"],"FeatureCounts_exonic_segments_{sample}.log")
     shell:
         """(set +o pipefail; mkdir -p {params.outdir}; \
-        featureCounts -p --countReadPairs -O --fraction -Q 255 -s 2 -B -C -P -d 0 -D 10000000000000 -T {threads} -t exon -g gene_id -a {input.exonic_segments_gtf} -o {output.out_gene_fragments_txt} {input.bam}) &> {log}"""
+        featureCounts -p --countReadPairs -O --fraction -Q 255 -s 0 -B -C -P -d 0 -D 10000000000000 -T {threads} -t exon -g gene_id -a {input.exonic_segments_gtf} -o {output.out_gene_fragments_txt} {input.bam}) &> {log}"""
 
 rule FeatureCounts_standard:
+    ### we put UNSTRANDED read counting now, to match TCGA
     input:
         bam=os.path.join(
                         config["output_dir"],
@@ -263,7 +265,7 @@ rule FeatureCounts_standard:
         os.path.join(config["local_log"],"FeatureCounts_standard_{sample}.log")
     shell:
         """(set +o pipefail; mkdir -p {params.outdir}; \
-        featureCounts -p --countReadPairs -O --fraction -Q 255 -s 2 -B -C -P -d 1 -D 10000000000000 -T {threads} -t exon -g gene_id -a {input.gtf} -o {output.out_gene_fragments_txt} {input.bam}) &> {log}"""
+        featureCounts -p --countReadPairs -O --fraction -Q 255 -s 0 -B -C -P -d 1 -D 10000000000000 -T {threads} -t exon -g gene_id -a {input.gtf} -o {output.out_gene_fragments_txt} {input.bam}) &> {log}"""
 
 rule FeatureCounts_gene_types:
     input:
