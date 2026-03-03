@@ -38,3 +38,4 @@ dependencies:
 # Pip-specific installs
   - pip:
       - "black[jupyter]"
+      - "huggingface_hub[hf_xet]"

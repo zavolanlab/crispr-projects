@@ -27,6 +27,13 @@ data/
 __pycache__/
 *.py[cod]
 
+
+# ========================
+# 4. Hugging Face Uploading script with FILLED IN token
+# ========================
+
+upload_to_hf.with_token.py
+
 # ========================
 # 4. OS / System Files
 # ========================
