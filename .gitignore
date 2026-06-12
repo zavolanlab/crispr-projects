@@ -23,6 +23,12 @@ results/
 logs/
 data/
 
+# Workflow - in this branch it's not used
+WF/
+
+# Intallation of environment is also not used here
+install/
+
 # ========================
 # 3. Python & Jupyter Junk
 # ========================
@@ -38,6 +44,7 @@ __pycache__/
 # ========================
 
 upload_to_hf.with_token.py
+upload_to_hf.no_token.py
 
 # ========================
 # 4. OS / System Files
