@@ -4,6 +4,32 @@ import pandas as pd
 import pyBigWig
 import numpy as np
 
+def get_extra_field_index(bw, field_name):
+    """Return 0-based index of field_name in BigBed extra (non-BED3) fields via AutoSQL."""
+    try:
+        sql = bw.SQL()
+        if sql:
+            fields = []
+            in_body = False
+            for line in sql.split('\n'):
+                line = line.strip()
+                if line == '(':
+                    in_body = True
+                    continue
+                if line == ')':
+                    break
+                if in_body and line and not line.startswith('#'):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        fields.append(parts[1].rstrip(';'))
+            extra_fields = fields[3:]  # skip chrom, chromStart, chromEnd
+            if field_name in extra_fields:
+                return extra_fields.index(field_name)
+    except Exception:
+        pass
+    return None
+
+
 # Parse command line arguments
 bed_file = sys.argv[1]
 track_dir = sys.argv[2]
@@ -26,7 +52,7 @@ for gene_id, group in bed_df.groupby('gene_id'):
     try:
         bw = pyBigWig.open(track_path)
     except Exception:
-        results.append((gene_id, np.nan, np.nan))
+        results.append((gene_id, np.nan, np.nan) if not is_bigbed else (gene_id, np.nan, np.nan, np.nan, np.nan))
         continue
     
     if not is_bigbed:
@@ -47,9 +73,12 @@ for gene_id, group in bed_df.groupby('gene_id'):
             results.append((gene_id, np.nan, np.nan))
             
     else:
-        # DISCRETE: Calculate Count and Density for BigBeds (gnomAD, TCGA)
+        # DISCRETE: Count, Density, Max sampleCount, Weighted sampleCount for BigBeds (gnomAD, TCGA)
         total_mutations = 0
         total_length = 0
+        max_sample_count = 0
+        weighted_count = 0
+        sc_idx = get_extra_field_index(bw, 'sampleCount') # sampleCount is present in TCGA .bb storing recurrency of mutations
         for _, row in group.iterrows():
             total_length += (row['end'] - row['start'])
             if row['chrom'] in bw.chroms():
@@ -57,21 +86,34 @@ for gene_id, group in bed_df.groupby('gene_id'):
                     entries = bw.entries(row['chrom'], row['start'], row['end'])
                     if entries is not None:
                         total_mutations += len(entries)
+                        if sc_idx is not None:
+                            for entry in entries:
+                                try:
+                                    sc = int(entry[2].split('\t')[sc_idx])
+                                    max_sample_count = max(max_sample_count, sc)
+                                    weighted_count += sc
+                                except (ValueError, IndexError):
+                                    pass
                 except RuntimeError:
                     pass
         bw.close()
         
         if total_length > 0:
             density_per_kb = (total_mutations / total_length) * 1000
-            results.append((gene_id, total_mutations, density_per_kb))
+            results.append((gene_id, total_mutations, density_per_kb, max_sample_count, weighted_count))
         else:
-            results.append((gene_id, np.nan, np.nan))
+            results.append((gene_id, np.nan, np.nan, np.nan, np.nan))
 
-# Dynamic column naming based on file type
-col1 = 'Mean' if not is_bigbed else 'Count'
-col2 = 'Median' if not is_bigbed else 'Density_per_kb'
-
-res_df = pd.DataFrame(results, columns=['Geneid', f'{track_name}_{col1}', f'{track_name}_{col2}'])
+# Build output DataFrame with type-appropriate columns
+if not is_bigbed:
+    res_df = pd.DataFrame(results, columns=[
+        'Geneid', f'{track_name}_Mean', f'{track_name}_Median'
+    ])
+else:
+    res_df = pd.DataFrame(results, columns=[
+        'Geneid', f'{track_name}_Count', f'{track_name}_Density_per_kb',
+        f'{track_name}_Max_sampleCount', f'{track_name}_Weighted_sampleCount'
+    ])
 
 # Save output
 res_df.to_csv(out_file, sep='\t', index=False)
