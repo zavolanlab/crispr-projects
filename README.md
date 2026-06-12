@@ -48,12 +48,10 @@ You must map the project to your local HPC paths.
 This way `CRISPR_projects.scicore.env` will be automatically accessible by group members but will not be tracked by git.
 *(Note: `*.env` files are ignored by git to protect private cluster paths, except the `CRISPR_projects.template.env` file).*
 
-### 3. Install the Conda Environment
-Create and activate the master environment required to run the Jupyter notebook and standard data science libraries (Pandas, UMAP, SciPy, BioPython, etc.):
-```bash
-conda env create -f install/environment.yaml
-conda activate crispr_projects
-```
+### 3. Install the conda environment with zavolab_pyutils
+Analysis in the notebook is largely based on the functions from [zavolab_pyutils](https://github.com/zavolanlab/zavolab_pyutils/tree/dev) repository.
+Follow the instruction from that repo "Developer Setup from source, with conda environment".
+Use the created conda environment "zavolab_pyutils" to execute the Jupyter Notebook.
 
 ## Executing the Workflows
 
