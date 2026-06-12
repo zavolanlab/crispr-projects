@@ -8,6 +8,11 @@
 # EXCEPT for the safe template (force Git to track this one)
 !CRISPR_projects.template.env
 
+# Ignore all .ipynb files (Jupyter notebooks)
+*.ipynb
+# except the one for which current branch is dedicated
+!HCC_RiboSeq_paper.ipynb
+
 # ========================
 # 2. Snakemake Hidden Files
 # ========================
