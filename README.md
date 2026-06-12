@@ -1,16 +1,10 @@
-# CRISPR Projects Analysis and Pipelines
+# Ribosome profiling reveals extensive translational alterations in steatohepatitis-associated hepatocellular carcinoma
 
-This repository contains the computational workflows and downstream analysis notebooks related to CRISPR projects in Zavolan lab.
-
-The repository is optimized for running BOTH the workflows and analysis in jupyter notebook on HPC cluster.
+This repository contains the jupyter notebook and auxiliary scripts related to the analysis of evolutionary conservation and mutations associated with novel ORFs (nORFs) identified in Ribo-seq data from tumor and non-tumor hepatocellular carcinoma (HCC) samples.
 
 On sciCORE HPC, running jupyter notebook on a computational node is nicely enabled by [OnDemand service](https://docs.scicore.unibas.ch/HPC%20Cluster/interactivecomputing/#open-ondemand-ood).
 
-We utilize a hybrid approach: **Snakemake** for robust, scalable data processing on HPC clusters (sciCORE), and **Jupyter Notebooks** for interactive downstream analysis and visualization.
-
-# Current state
-Currently, we use RNA-seq and Ribo-seq data to identify targets for CRISPR perturbations
-We make UCSC trackhub to interactively visualize these data using [UCSC Genome browser](https://genome-euro.ucsc.edu/cgi-bin/hgTracks?db=hg38&lastVirtModeType=default&lastVirtModeExtraState=&virtModeType=default&virtMode=0&nonVirtPosition=&position=chr12%3A6534517-6538371)
+**Jupyter Notebook** is used for interactive analysis and visualization, and for automatic generation of SLURM scripts that should be run on the HPC cluster.
 
 ## Repository Structure
 
