@@ -10,8 +10,14 @@
 
 # Ignore all .ipynb files (Jupyter notebooks)
 *.ipynb
-# except the one for which current branch is dedicated
+# except the ones for which current branch is dedicated
 !HCC_RiboSeq_paper.ipynb
+!Liver_lincRNA_ORFs/Liver_lincRNA_ORFs.ipynb
+
+# Nextflow run artefacts (runs are written outside the repository, but just in case)
+.nextflow/
+.nextflow.log*
+work/
 
 # ========================
 # 2. Snakemake Hidden Files

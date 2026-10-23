@@ -4,6 +4,8 @@ This repository contains the jupyter notebook and auxiliary scripts related to t
 
 Historically, this analysis is related to CRISPR projects of the Zavolan Lab, hence it's stored in respective repository.
 
+> **Additional project: Liver lincRNA ORFs.** Automated de novo annotation of expressed lincRNAs in hepatic cell lines and prioritization of their translated ORFs (Ribo-seq, polysome profiling, RNA-seq, PhyloCSF), with a Nextflow pipeline and a dedicated notebook. See [Liver_lincRNA_ORFs/README.md](Liver_lincRNA_ORFs/README.md).
+
 On sciCORE HPC, running jupyter notebook on a computational node is nicely enabled by [OnDemand service](https://docs.scicore.unibas.ch/HPC%20Cluster/interactivecomputing/#open-ondemand-ood).
 
 **Jupyter Notebook** is used for interactive analysis and visualization, and for automatic generation of SLURM scripts that should be run on the HPC cluster.

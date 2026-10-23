@@ -1,0 +1,33 @@
+name: lincorfz_py
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas>=2.0
+  - scipy
+  - statsmodels
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - pysam
+  - pybigwig
+  - htseq
+  - biopython
+  - adjusttext
+  - ruamel.yaml
+  - nbstripout
+  - tomli-w
+  - bedtools
+  - samtools
+  # notebook execution (Liver_lincRNA_ORFs.ipynb can be run as a SLURM job with nbclient)
+  - ipykernel
+  - nbformat
+  - nbclient
+  - python-dotenv
+  - pip
+  - pip:
+      # pySanity and GTF utilities (dev branch); dependencies are provided by conda above
+      - git+https://github.com/zavolanlab/zavolab_pyutils.git@dev
