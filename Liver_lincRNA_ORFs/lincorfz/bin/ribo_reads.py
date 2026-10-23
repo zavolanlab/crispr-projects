@@ -6,8 +6,6 @@ captures untemplated nucleotides added during library preparation, which shift t
 aligned 5' end relative to the true footprint 5' end; P-site offsets are therefore
 calibrated per class and always counted from the *aligned* 5' end.
 """
-import gzip
-
 import pandas as pd
 
 BAM_CMATCH, BAM_CINS, BAM_CDEL, BAM_CREF_SKIP, BAM_CSOFT_CLIP, BAM_CEQUAL, BAM_CDIFF = 0, 1, 2, 3, 4, 7, 8
@@ -80,8 +78,16 @@ def junctions_ok(read, chrom_whitelist):
     return all(j in chrom_whitelist for j in introns_of_read(read))
 
 
-def load_offsets(path):
-    """dict (aligned_len, clip5) -> offset for classes that passed calibration."""
+def load_offsets(path, include_failed=False, min_cds_reads=100):
+    """
+    dict (aligned_len, clip5) -> offset.
+    Default: classes that passed calibration. With include_failed: also classes that failed the
+    frame-quality criteria but have a defined offset and >= min_cds_reads CDS reads (used for the
+    per-read-length tracks, where the frame quality of each length is assessed downstream).
+    """
     df = pd.read_csv(path, sep="\t")
-    df = df.loc[df["pass"].astype(bool)]
+    if include_failed:
+        df = df.loc[df["pass"].astype(bool) | ((df["offset"] >= 0) & (df["n_cds"] >= min_cds_reads))]
+    else:
+        df = df.loc[df["pass"].astype(bool)]
     return {(int(r.aligned_len), int(r.clip5)): int(r.offset) for r in df.itertuples()}

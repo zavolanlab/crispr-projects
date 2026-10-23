@@ -2,7 +2,23 @@
 """
 Integrate all evidence layers per ORF, rank ORFs and write browser-ready annotations.
 
-Ribo-seq evidence class (pooled replicates; thresholds are parameters):
+Periodicity p-value (per replicate and pooled) = min of two tests:
+  * per-codon test of the HCC Ribo-seq paper (one-sided Wilcoxon rank-sum, in-frame vs each off-frame,
+    Fisher-combined; computed by call_orfs.py) -- robust, but underpowered for short ORFs whose
+    P-sites pile up on a few codons;
+  * read-count frame test: one-sided binomial test that the in-frame share of the ORF's P-sites exceeds
+    1/3, applied only if frame 0 dominates, >= --frame-test-min-codons codons carry in-frame P-sites and
+    the in-frame fraction is >= --frame-test-min-frac-inframe (guards against a single stacked codon).
+  Both p-values are reported (<label>_p_periodicity, <label>_p_frame_count).
+
+Bayesian frame test (bayes_frame_test.py, read-length-specific priors): evidence classes
+  strong   pooled log10 BF >= --bayes-strong, in-frame P-sites >= --min-inframe-strong and
+           >= --min-reps-strong samples with log10 BF >= --bayes-rep-support
+  moderate pooled log10 BF >= --bayes-moderate, in-frame P-sites >= --min-inframe-moderate
+  weak     pooled log10 BF >= --bayes-weak, in-frame P-sites >= 3
+The final class is the higher of the Bayesian class and the periodicity-test class below.
+
+Periodicity-test evidence class (pooled replicates; thresholds are parameters):
   strong    p_periodicity < --p-strong, in-frame P-sites >= --min-inframe-strong,
             in-frame fraction >= --min-frac-inframe-strong, >= --min-reps-strong replicates p < 0.05
   moderate  p < --p-moderate, in-frame P-sites >= --min-inframe-moderate, in-frame fraction >= 0.4
@@ -18,7 +34,7 @@ Ribo-seq evidence (missing values -> 0, except conservation -> 0.5):
   MRL           isoform-level MRL percentile among canonical mRNAs        (--w-mrl)
   ribo          -log10 pooled periodicity p-value                          (--w-ribo)
   island        log2 P-site density ORF / rest of the isoform              (--w-island)
-  expression    pySanity log2 CPM of the locus in --primary-condition      (--w-expr)
+  expression    Sanity log2 TPM of the locus in --primary-condition        (--w-expr)
   conservation  PhyloCSF median                                            (--w-cons)
   uniqueness    fraction of ORF P-sites from uniquely mapped reads (raw)   (--w-unique)
   peptides      1 if a unique peptide was matched (only if peptides given) (--w-pep)
@@ -39,6 +55,7 @@ import tempfile
 import matplotlib
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -118,6 +135,12 @@ def main():
     ap.add_argument("--expression", required=True)
     ap.add_argument("--conservation", required=True)
     ap.add_argument("--peptides", default="")
+    ap.add_argument("--bayes", default="", help="orf_frame_bayes.tsv (Bayesian frame test)")
+    ap.add_argument("--bayes-strong", type=float, default=2.0, help="min pooled log10 BF for 'strong'")
+    ap.add_argument("--bayes-moderate", type=float, default=1.0)
+    ap.add_argument("--bayes-weak", type=float, default=0.5)
+    ap.add_argument("--bayes-rep-support", type=float, default=0.5,
+                    help="per-sample log10 BF counted as replicate support (strong needs --min-reps-strong)")
     ap.add_argument("--reference-gtf", required=True)
     ap.add_argument("--hcc-orfs-gtf", default="", help="HCC Ribo-seq paper nORF GTF (lincRNA ORFs with evidence)")
     ap.add_argument("--replicate-labels", required=True, help="comma-separated P-site replicate labels")
@@ -130,6 +153,10 @@ def main():
     ap.add_argument("--min-inframe-moderate", type=float, default=5)
     ap.add_argument("--p-weak", type=float, default=5e-2)
     ap.add_argument("--min-frac-unique", type=float, default=0.1)
+    ap.add_argument("--frame-test-min-codons", type=int, default=3)
+    ap.add_argument("--frame-test-min-frac-inframe", type=float, default=0.45)
+    ap.add_argument("--frame-test", action="store_true",
+                    help="also use the frequentist read-count frame test (superseded by the Bayesian test)")
     ap.add_argument("--w-mrl", type=float, default=0.25)
     ap.add_argument("--w-ribo", type=float, default=0.20)
     ap.add_argument("--w-island", type=float, default=0.10)
@@ -154,19 +181,23 @@ def main():
     orfs = orfs.merge(porf[["orf_id", "orf_MRL", "orf_MRL_pct_vs_mRNA", "orf_polysome_mean_coverage"]],
                       on="orf_id", how="left")
     expr = pd.read_csv(args.expression, sep="\t").set_index("gene_id")
-    ecols = [c for c in expr.columns if c.startswith("log2CPM_") and not c.startswith("log2CPM_sample_")]
-    orfs = orfs.merge(expr[ecols + [c for c in expr.columns if c.startswith("err_rel_")]],
-                      left_on="locus_id", right_index=True, how="left")
+    ecols = [c for c in expr.columns if c.startswith(("log2CPM_", "log2TPM_", "err_log2"))
+             and not c.startswith("log2CPM_sample_")]
+    orfs = orfs.merge(expr[ecols], left_on="locus_id", right_index=True, how="left")
     trib = pd.read_csv(args.transcript_ribo, sep="\t").set_index("transcript_id")
     orfs["tx_psites"] = orfs["transcript_id"].map(trib["tx_psites"])
     cons = pd.read_csv(args.conservation, sep="\t")
     orfs = orfs.merge(cons, on="orf_id", how="left")
+    has_bayes = bool(args.bayes) and os.path.exists(args.bayes)
+    if has_bayes:
+        orfs = orfs.merge(pd.read_csv(args.bayes, sep="\t"), on="orf_id", how="left")
     has_pep = bool(args.peptides) and os.path.exists(args.peptides)
     if has_pep:
         pep = pd.read_csv(args.peptides, sep="\t")
         orfs = orfs.merge(pep, on="orf_id", how="left")
         orfs["n_unique_peptides"] = orfs["n_unique_peptides"].fillna(0).astype(int)
-    for c in ["n_exons", "lncRNA_gene_names", "lncRNA_gene_ids", "pseudogene_names", "pseudogene_types",
+    for c in ["gene_name_source", "name_source_gene_ids", "n_exons", "lncRNA_gene_names", "lncRNA_gene_ids",
+              "pseudogene_names", "pseudogene_types",
               "small_RNA_names", "NONCODE_gene_ids", "antisense_coding_exon_overlap",
               "possible_3UTR_extension_of", "possible_5prime_extension_of", "is_reference"]:
         if c in tx.columns and c not in orfs.columns:
@@ -196,15 +227,47 @@ def main():
             for h, e in zip(orfs["HCC_paper_lincRNA_ORFs"], own_end)]
     subprocess.run(["rm", "-rf", tmp], check=True)
 
+    # ---------------------------------------------------------------- periodicity: Wilcoxon + frame counts
+    def frame_count_p(lab):
+        f0, f1, f2 = orfs[f"{lab}_f0"], orfs[f"{lab}_f1"], orfs[f"{lab}_f2"]
+        n = (f0 + f1 + f2).round().astype(int)
+        k = f0.round().astype(int)
+        ok = ((f0 > f1) & (f0 > f2) & (orfs[f"{lab}_codons_inframe"] >= args.frame_test_min_codons)
+              & (orfs[f"{lab}_frac_inframe"].fillna(0) >= args.frame_test_min_frac_inframe))
+        pv = pd.Series(stats.binom.sf(k - 1, n.clip(lower=1), 1.0 / 3.0), index=orfs.index)
+        return pv.where(ok & (n > 0), 1.0)
+
+    for lab in reps + ["pooled", "pooled_unique"]:
+        orfs[f"{lab}_p_wilcoxon"] = orfs[f"{lab}_p_periodicity"]
+        orfs[f"{lab}_p_frame_count"] = frame_count_p(lab)
+        if args.frame_test:
+            orfs[f"{lab}_p_periodicity"] = np.minimum(orfs[f"{lab}_p_wilcoxon"], orfs[f"{lab}_p_frame_count"])
+    orfs["periodicity_test"] = np.where(args.frame_test & (orfs["pooled_p_frame_count"] < orfs["pooled_p_wilcoxon"]),
+                                        "frame_count", "wilcoxon")
+
     # ---------------------------------------------------------------- evidence classes
     p = orfs["pooled_p_periodicity"]
     f0 = orfs["pooled_f0"]
     fr = orfs["pooled_frac_inframe"]
     orfs["n_reps_p05"] = sum((orfs[f"{r}_p_periodicity"] < 0.05).astype(int) for r in reps)
-    ev = np.where((p < args.p_strong) & (f0 >= args.min_inframe_strong) & (fr >= args.min_frac_inframe_strong)
-                  & (orfs["n_reps_p05"] >= args.min_reps_strong), "strong",
-                  np.where((p < args.p_moderate) & (f0 >= args.min_inframe_moderate) & (fr >= 0.4), "moderate",
-                           np.where((p < args.p_weak) & (f0 >= 3), "weak", "none")))
+    ev_w = np.where((p < args.p_strong) & (f0 >= args.min_inframe_strong) & (fr >= args.min_frac_inframe_strong)
+                    & (orfs["n_reps_p05"] >= args.min_reps_strong), "strong",
+                    np.where((p < args.p_moderate) & (f0 >= args.min_inframe_moderate) & (fr >= 0.4), "moderate",
+                             np.where((p < args.p_weak) & (f0 >= 3), "weak", "none")))
+    orfs["ribo_evidence_periodicity_test"] = ev_w
+    order = {"none": 0, "weak": 1, "moderate": 2, "strong": 3}
+    if has_bayes:
+        bf = orfs["bayes_log10BF_pooled"].fillna(-np.inf)
+        orfs["n_reps_bayes_support"] = sum((orfs.get(f"bayes_log10BF_{r}", pd.Series(-np.inf, index=orfs.index))
+                                            .fillna(-np.inf) >= args.bayes_rep_support).astype(int) for r in reps)
+        ev_b = np.where((bf >= args.bayes_strong) & (f0 >= args.min_inframe_strong)
+                        & (orfs["n_reps_bayes_support"] >= args.min_reps_strong), "strong",
+                        np.where((bf >= args.bayes_moderate) & (f0 >= args.min_inframe_moderate), "moderate",
+                                 np.where((bf >= args.bayes_weak) & (f0 >= 3), "weak", "none")))
+        orfs["ribo_evidence_bayes"] = ev_b
+        ev = np.where(pd.Series(ev_b).map(order).to_numpy() > pd.Series(ev_w).map(order).to_numpy(), ev_b, ev_w)
+    else:
+        ev = ev_w
     orfs["ribo_evidence_all_reads"] = ev
     multi = (ev != "none") & (orfs["frac_psites_unique"].fillna(0) < args.min_frac_unique)
     orfs["ribo_evidence"] = np.where(multi, "multimapping", ev)
@@ -215,7 +278,7 @@ def main():
 
     # ---------------------------------------------------------------- score
     pool = orfs["ribo_evidence"].isin(["strong", "moderate", "weak"])
-    prim = f"log2CPM_{args.primary_condition}"
+    prim = f"log2TPM_{args.primary_condition}" if f"log2TPM_{args.primary_condition}" in orfs else f"log2CPM_{args.primary_condition}"
     comp = pd.DataFrame(index=orfs.index)
 
     def within_pool(series, fill):
@@ -225,7 +288,9 @@ def main():
         return out
 
     comp["c_mrl"] = within_pool(orfs["MRL_pct_vs_mRNA"], 0.0)
-    comp["c_ribo"] = within_pool(-np.log10(p.clip(lower=1e-50)), 0.0)
+    ribo_strength = (orfs["bayes_log10BF_pooled"].clip(lower=-50, upper=50) if has_bayes
+                     else -np.log10(p.clip(lower=1e-50)))
+    comp["c_ribo"] = within_pool(ribo_strength, 0.0)
     comp["c_island"] = within_pool(orfs["island_log2ratio"], 0.0)
     comp["c_expr"] = within_pool(orfs[prim] if prim in orfs else pd.Series(np.nan, index=orfs.index), 0.0)
     comp["c_cons"] = within_pool(orfs["PhyloCSF_Median"], 0.5)
@@ -247,9 +312,13 @@ def main():
     lead = ["rank", "orf_label", "orf_id", "ribo_evidence", "priority_score", "locus_id", "locus_name",
             "transcript_id", "isoforms", "chrom", "orf_start0", "orf_end1", "strand", "n_aa", "start_codon",
             "kozak_context", "kozak_score", "MRL", "MRL_pct_vs_mRNA", "orf_MRL", prim, "TPM_max",
-            "pooled_psites", "pooled_f0", "pooled_frac_inframe", "pooled_p_periodicity", "n_reps_p05",
-            "island_log2ratio", "frac_tx_psites_in_orf", "frac_psites_unique", "ribo_evidence_all_reads",
-            "ribo_evidence_unique_reads", "PhyloCSF_Median",
+            "pooled_psites", "pooled_f0", "pooled_frac_inframe", "bayes_log10BF_pooled", "bayes_posterior_pooled",
+            "n_reps_bayes_support", "bayes_best_model_pooled", "modal_read_length", "support_read_length_range",
+            "support_read_lengths", "read_lengths_with_inframe_evidence", "pooled_p_periodicity",
+            "pooled_p_wilcoxon", "pooled_p_frame_count", "pooled_codons_inframe", "n_reps_p05",
+            "ribo_evidence_periodicity_test", "ribo_evidence_bayes", "island_log2ratio", "frac_tx_psites_in_orf",
+            "frac_psites_unique", "ribo_evidence_all_reads", "ribo_evidence_unique_reads", "gene_name_source",
+            "PhyloCSF_Median",
             "PhyloCSF_Power_Median"]
     lead = [c for c in lead if c in orfs.columns]
     orfs = orfs[lead + [c for c in orfs.columns if c not in lead]]
@@ -270,6 +339,7 @@ def main():
     for tid, g in tex_by.items():
         r = tx.loc[tid]
         a = {"gene_id": r["gene_id"], "transcript_id": tid, "gene_name": r["locus_name"],
+             "gene_name_source": r.get("gene_name_source", "NA"),
              "gene_type": "lincRNA_denovo", "transcript_type": "lincRNA_isoform", "TPM_max": f"{r['TPM_max']:.2f}"}
         add(r["chrom"], int(g["start0"].min()), int(g["end1"].max()), "transcript", r["strand"], a, 0)
         for s, e in zip(g["start0"], g["end1"]):
@@ -277,15 +347,20 @@ def main():
     for r in sel.itertuples():
         g = tex_by[r.transcript_id]
         a = {"gene_id": r.locus_id, "transcript_id": r.orf_label, "gene_name": r.locus_name,
+             "gene_name_source": getattr(r, "gene_name_source", "NA"),
              "gene_type": "lincRNA_denovo", "transcript_type": "lincRNA_ORF", "orf_id": r.orf_id,
              "rank": r.rank, "ribo_evidence": r.ribo_evidence, "priority_score": f"{r.priority_score:.3f}",
              "n_aa": r.n_aa, "start_codon": r.start_codon,
-             "p_periodicity": f"{r.pooled_p_periodicity:.2e}", "inframe_psites": int(r.pooled_f0),
+             "bayes_log10BF": f"{r.bayes_log10BF_pooled:.2f}" if has_bayes and pd.notna(r.bayes_log10BF_pooled) else "NA",
+             "bayes_posterior": f"{r.bayes_posterior_pooled:.3f}" if has_bayes and pd.notna(r.bayes_posterior_pooled) else "NA",
+             "support_read_lengths": getattr(r, "support_read_lengths", "NA") if has_bayes else "NA",
+             "p_wilcoxon": f"{r.pooled_p_wilcoxon:.2e}",
+             "inframe_psites": int(r.pooled_f0), "codons_inframe": int(r.pooled_codons_inframe),
              "frac_inframe": f"{r.pooled_frac_inframe:.2f}", "island_log2ratio": f"{r.island_log2ratio:.2f}",
              "frac_psites_unique": f"{r.frac_psites_unique:.2f}" if pd.notna(r.frac_psites_unique) else "NA",
              "MRL": f"{r.MRL:.2f}" if pd.notna(r.MRL) else "NA",
              "MRL_pct_vs_mRNA": f"{r.MRL_pct_vs_mRNA:.2f}" if pd.notna(r.MRL_pct_vs_mRNA) else "NA",
-             "expression_log2CPM": f"{getattr(r, prim):.2f}" if prim in sel and pd.notna(getattr(r, prim)) else "NA",
+             "expression_" + prim.split("_")[0]: f"{getattr(r, prim):.2f}" if prim in sel and pd.notna(getattr(r, prim)) else "NA",
              "PhyloCSF_median": f"{r.PhyloCSF_Median:.2f}" if pd.notna(r.PhyloCSF_Median) else "NA",
              "aa_seq": r.aa_seq}
         add(r.chrom, int(g["start0"].min()), int(g["end1"].max()), "transcript", r.strand, a, 0)

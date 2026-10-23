@@ -27,6 +27,12 @@ dependencies:
   - nbformat
   - nbclient
   - python-dotenv
+  # Sanity_utils (installed by setup_conda_envs.sh) and the build of the C++ Sanity binary
+  - threadpoolctl
+  - cxx-compiler
+  - make
+  - zlib
+  - git
   - pip
   - pip:
       # pySanity and GTF utilities (dev branch); dependencies are provided by conda above

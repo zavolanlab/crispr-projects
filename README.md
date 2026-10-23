@@ -4,7 +4,7 @@ This repository contains the jupyter notebook and auxiliary scripts related to t
 
 Historically, this analysis is related to CRISPR projects of the Zavolan Lab, hence it's stored in respective repository.
 
-> **Additional project: Liver lincRNA ORFs.** Automated de novo annotation of expressed lincRNAs in hepatic cell lines and prioritization of their translated ORFs (Ribo-seq, polysome profiling, RNA-seq, PhyloCSF), with a Nextflow pipeline and a dedicated notebook. See [Liver_lincRNA_ORFs/README.md](Liver_lincRNA_ORFs/README.md).
+> **Follow-up project: Liver lincRNA ORFs.** Automated de novo annotation of expressed lincRNAs in hepatic cell lines and prioritization of their translated ORFs (Ribo-seq, polysome profiling, RNA-seq, PhyloCSF), with a Nextflow pipeline and a dedicated notebook. See [Liver_lincRNA_ORFs/README.md](Liver_lincRNA_ORFs/README.md). The project is self-contained (own README, pipeline and environments), NO need to follow the instructions below if you are only interested in that follow-up project.
 
 On sciCORE HPC, running jupyter notebook on a computational node is nicely enabled by [OnDemand service](https://docs.scicore.unibas.ch/HPC%20Cluster/interactivecomputing/#open-ondemand-ood).
 
@@ -16,8 +16,10 @@ On sciCORE HPC, running jupyter notebook on a computational node is nicely enabl
 .
 ├── HCC_RiboSeq_paper.ipynb             # Main master Jupyter notebook with analysis
 ├── CRISPR_projects.template.env        # Template for required environment variables/paths
-└── analysis_scripts/                    
-    ├── compute_track_metrics.py        # python script for computing various metrics stored in external .bb or .bigwig files
+├── environment.hcc_riboseq_paper.yml   # Conda environment of the notebook (see step 3)
+├── analysis_scripts/                    
+│   ├── compute_track_metrics.py        # python script for computing various metrics stored in external .bb or .bigwig files
+└── Liver_lincRNA_ORFs/                 # Follow-up project, self-contained (own README, pipeline and environments)
 ```
 
 ## Quick Start & Setup
@@ -47,10 +49,17 @@ This way `CRISPR_projects.scicore.env` will be automatically accessible by group
 
 The notebook automatically loads your `.env` paths using `python-dotenv`, allowing it to dynamically locate the files in the system regardless of where you cloned this repository.
 
-### 3. Install the conda environment with zavolab_pyutils
-Analysis in the notebook is largely based on the functions from [zavolab_pyutils](https://github.com/zavolanlab/zavolab_pyutils/tree/dev) repository.
-Follow the instruction from that repo "Developer Setup from source, with conda environment".
-Use the created conda environment "zavolab_pyutils" to execute the Jupyter Notebook.
+### 3. Create the conda environment of the notebook
+Analysis in the notebook is largely based on the functions from [zavolab_pyutils](https://github.com/zavolanlab/zavolab_pyutils/tree/dev), but the environment that can be created from that repository does **not** contain all modules used here. Create the dedicated environment instead; it installs zavolab_pyutils (functions and the `transcript_to_genomic` / `cds_to_transcriptomic` command-line tools) together with all other Python modules imported by the notebook, `bedtools` and the UCSC kent utilities (`bigWigMerge`, `bedGraphToBigWig`, `bedToBigBed`, `gtfToGenePred`, ...):
+```bash
+PYTHONNOUSERSITE=1 conda env create -f environment.hcc_riboseq_paper.yml   # on a login node (needs internet)
+conda activate hcc_riboseq_paper
+```
+Use this environment (`hcc_riboseq_paper`) as the kernel of `HCC_RiboSeq_paper.ipynb` and to run the SLURM scripts that the notebook generates (they activate it with `source activate`; replace the environment name there if you created it under another name).
+
+## Liver_lincRNA_ORFs: independent of the setup above
+
+The follow-up project in [Liver_lincRNA_ORFs/](Liver_lincRNA_ORFs/README.md) does **not** need the conda environment of step 3 nor anything else installed for `HCC_RiboSeq_paper.ipynb`. Its Nextflow pipeline brings its own conda environments (`Liver_lincRNA_ORFs/lincorfz/envs/`, built with `Liver_lincRNA_ORFs/lincorfz/setup_conda_envs.sh`), and its notebook runs in one of them. The only shared piece is the `.env` file with the cluster paths (step 2): its notebook reads `Liver_projects.scicore.env` from the repository root. Follow [Liver_lincRNA_ORFs/README.md](Liver_lincRNA_ORFs/README.md) for everything else.
 
 ## Submitting the SLURM jobs and computation-heavy bash commands
 

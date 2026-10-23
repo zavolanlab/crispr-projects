@@ -11,6 +11,9 @@ Every assembled transcript is annotated against the reference (GENCODE) on the S
     frequently pre-mRNA)                                   -> excluded unless --keep-pc-intronic
   * overlaps with lncRNA, pseudogene and small-RNA genes, and with NONCODE transcripts
                                                            -> reported only (names / ids)
+Each selected locus is named after the GENCODE gene with the largest exonic overlap (non-small-RNA
+genes preferred), else the NONCODE gene with the largest overlap, else the StringTie gene id
+(column gene_name_source).
 and additionally: antisense exon overlap with coding genes, and the distance to the nearest
 same-strand coding transcript (possible UTR extensions are flagged, not removed).
 
@@ -59,6 +62,47 @@ def overlap_names(a_bed, b_bed, strand_flag="-s"):
         f = line.split("\t")
         res.setdefault(f[3], set()).add(f[9])
     return {k: ",".join(sorted(v)) for k, v in res.items()}
+
+
+def overlap_bp(a_bed, b_bed, strand_flag="-s"):
+    """DataFrame (a_name, b_name, bp): exonic overlap in nt of every A x B pair."""
+    out = bedtools("intersect", "-a", a_bed, "-b", b_bed, strand_flag, "-wo")
+    rows = [(f[3], f[9], int(f[-1])) for f in (l.split("\t") for l in out.splitlines())]
+    return pd.DataFrame(rows, columns=["transcript_id", "name", "bp"])
+
+
+def locus_names(sel, ov_gencode, ov_noncode):
+    """
+    gene_name per locus (StringTie gene of the selected isoforms):
+      1. GENCODE gene with the largest exonic same-strand overlap over the locus' isoforms
+         (non-small-RNA genes first; small-RNA genes only if nothing else overlaps),
+      2. otherwise the NONCODE gene with the largest overlap,
+      3. otherwise the StringTie gene id.
+    """
+    t2l = sel.set_index("transcript_id")["gene_id"]
+    res = {}
+    for src, ov in [("GENCODE", ov_gencode), ("NONCODE", ov_noncode)]:
+        if ov is None or ov.empty:
+            continue
+        o = ov.loc[ov["transcript_id"].isin(t2l.index)].copy()
+        o["locus"] = o["transcript_id"].map(t2l)
+        if src == "GENCODE":
+            o["small"] = o["name"].str.split("|").str[2].isin(SMALL_RNA_TYPES)
+            o = o.sort_values(["locus", "small", "bp"], ascending=[True, True, False])
+            agg = o.groupby(["locus", "name", "small"], as_index=False)["bp"].sum().sort_values(
+                ["locus", "small", "bp"], ascending=[True, True, False])
+        else:
+            agg = o.groupby(["locus", "name"], as_index=False)["bp"].sum().sort_values(
+                ["locus", "bp"], ascending=[True, False])
+        for locus, g in agg.groupby("locus"):
+            if locus in res:
+                continue
+            top = g["name"].iat[0]
+            res[locus] = (top.split("|")[0], src, ",".join(dict.fromkeys(n.split("|")[1] for n in g["name"])),
+                          ",".join(dict.fromkeys(n.split("|")[0] for n in g["name"])))
+    out = pd.DataFrame.from_dict(res, orient="index", columns=["locus_name", "gene_name_source",
+                                                              "name_source_gene_ids", "name_source_gene_names"])
+    return out
 
 
 def main():
@@ -150,6 +194,9 @@ def main():
     ref_bed("pseudo_types", rex.loc[rex["gene_type"].str.contains("pseudogene", na=False)
                                     & ~rex["gene_type"].isin(SMALL_RNA_TYPES)], col="gene_type")
     ref_bed("small_exons", rex.loc[rex["gene_type"].isin(SMALL_RNA_TYPES)])
+    named = rex.loc[rex["gene_type"] != "protein_coding"].copy()
+    named["composite"] = named["gene_name"].fillna(named["gene_id"]) + "|" + named["gene_id"] + "|" + named["gene_type"]
+    ref_bed("named_exons", named, col="composite")
     cds_spans = rex.loc[rex["transcript_id"].isin(cds_tx)].groupby("transcript_id").agg(
         chrom=("chrom", "first"), start0=("start0", "min"), end1=("end1", "max"),
         strand=("strand", "first"), gene_name=("gene_name", "first")).reset_index()
@@ -170,8 +217,12 @@ def main():
         nc = nc.loc[nc["chrom"].isin(chroms) & nc["strand"].isin(["+", "-"])]
         ref_bed("noncode_exons", nc, col="gene_id")
         ann["NONCODE_gene_ids"] = pd.Series(overlap_names(a_bed, beds["noncode_exons"]))
+        ov_noncode = overlap_bp(a_bed, beds["noncode_exons"])
+        ov_noncode["name"] = ov_noncode["name"] + "|" + ov_noncode["name"]
     else:
         ann["NONCODE_gene_ids"] = np.nan
+        ov_noncode = None
+    ov_gencode = overlap_bp(a_bed, beds["named_exons"])
 
     # nearest same-strand coding transcript (signed w.r.t. the lincRNA strand: <0 upstream)
     out = bedtools("closest", "-a", a_span, "-b", beds["coding_tx_spans"], "-s", "-D", "a", "-t", "first")
@@ -224,11 +275,21 @@ def main():
     flag(tx["isoform_fraction"] < args.min_isoform_fraction, "minor_isoform")
     tx["selection"] = reason
 
-    names = (tx["lncRNA_gene_names"].fillna("")
-             .where(tx["lncRNA_gene_names"].notna(), tx["pseudogene_names"].fillna("")))
-    tx["locus_name"] = names.where(names != "", tx["gene_id"])
+    # names of the selected loci (GENCODE > NONCODE > StringTie id); other transcripts get their
+    # own transcript-level GENCODE/NONCODE names for the candidate report
+    selected = tx.loc[tx["selection"] == "selected"]
+    ln = locus_names(selected, ov_gencode, ov_noncode)
+    sel_mask = tx["selection"] == "selected"
+    tx["locus_name"] = tx["gene_id"]
+    tx["gene_name_source"] = "StringTie"
+    tx["name_source_gene_ids"] = ""
+    tx["name_source_gene_names"] = ""
+    for c in ["locus_name", "gene_name_source", "name_source_gene_ids", "name_source_gene_names"]:
+        tx.loc[sel_mask, c] = tx.loc[sel_mask, "gene_id"].map(ln[c]).fillna(tx.loc[sel_mask, c])
+    tx.loc[sel_mask & tx["gene_name_source"].eq("StringTie"), "locus_name"] = tx["gene_id"]
 
-    keep_cols = ["gene_id", "transcript_id", "locus_name", "chrom", "start0", "end1", "strand", "n_exons",
+    keep_cols = ["gene_id", "transcript_id", "locus_name", "gene_name_source", "name_source_gene_ids",
+                 "name_source_gene_names", "chrom", "start0", "end1", "strand", "n_exons",
                  "tx_length", *tpm_cols, "TPM_max", "best_condition", "isoform_fraction",
                  "min_intron_junction_reads", "is_reference", "ref_gene_id", "ref_gene_name",
                  "lncRNA_gene_names", "lncRNA_gene_ids", "pseudogene_names", "pseudogene_types", "small_RNA_names",
@@ -249,7 +310,8 @@ def main():
     for tid, g in ex.loc[ex["transcript_id"].isin(sel_ids)].groupby("transcript_id"):
         r = info.loc[tid]
         attrs = (f'gene_id "{r["gene_id"]}"; transcript_id "{tid}"; gene_name "{r["locus_name"]}"; '
-                 f'gene_type "lincRNA_denovo"; TPM_max "{r["TPM_max"]:.2f}";')
+                 f'gene_name_source "{r["gene_name_source"]}"; gene_type "lincRNA_denovo"; '
+                 f'TPM_max "{r["TPM_max"]:.2f}";')
         g = g.sort_values("start0")
         lines.append((r["chrom"], int(g["start0"].min()), 0,
                       f'{r["chrom"]}\tlincorfz\ttranscript\t{g["start0"].min() + 1}\t{g["end1"].max()}\t.\t'

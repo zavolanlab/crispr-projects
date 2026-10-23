@@ -40,10 +40,14 @@ supporting tracks, a ranked table of all ORFs and a protein FASTA.
 | `polysome_mrl/polysome.mrl_rep{r}.{plus,minus}.bw` | per-replicate MRL (replicates with all fractions) |
 | `riboseq/psite_bigwigs/pooled_cpm.{plus,minus}.bw` | HepG2 Ribo-seq P-sites, 3 replicates pooled, CPM |
 | `riboseq/psite_bigwigs/<sample>.{plus,minus}.bw` | P-site counts per replicate |
+| `riboseq/psite_bigwigs/by_read_length/<sample>.len<L>.{plus,minus}.cpm.bw` | P-sites of reads of aligned length L, per sample, CPM scaled by the sample's P-sites over all lengths (overlay in IGV, one colour per length) |
+| `riboseq/psite_bigwigs/by_read_length/pooled.len<L>.{plus,minus}.cpm.bw` | the same for the pooled samples |
 | `riboseq/calibration/` | P-site offsets per read class and start/stop metagene plots |
+| `riboseq/frame_priors/` | frame distribution and fitted Dirichlet priors per read length and sample (`frame_priors.pdf`) |
+| `orfs/orf_frame_bayes.tsv` | Bayesian in-frame test per ORF, per-length counts and Bayes factors |
 | `lincRNAs/lincRNA_transcripts.{gtf,tsv}` | selected expressed lincRNA isoforms and their annotation |
 | `lincRNAs/lincRNA_candidates.all.tsv` | all non-coding assembled transcripts with the reason for (non-)selection |
-| `expression/lincRNA_loci.expression.tsv` | pySanity log2 CPM (per sample, per cell line, errors) |
+| `expression/lincRNA_loci.expression.tsv` | Sanity log2 CPM and log2 TPM (per sample, per cell line with errors) |
 | `polysome_scores/`, `conservation/`, `orfs/` | per-module tables |
 | `pipeline_info/` | Nextflow report, timeline, trace, DAG |
 
@@ -85,23 +89,54 @@ TPM >= 1 in HepG2 or Huh7 (>= 5 for mono-exonic isoforms); every intron is suppo
 junction reads (STAR `SJ.out.tab`, all samples); and makes up >= 10% of its locus' expression.
 Overlaps with GENCODE lncRNAs (e.g. ZFAS1), pseudogenes (e.g. FRG1BP), small RNAs, NONCODE genes,
 antisense coding genes and possible UTR extensions of neighbouring coding genes are reported, not filtered.
+Each locus gets the `gene_name` of the GENCODE gene with the largest exonic same-strand overlap (genes other than
+small RNAs preferred); without a GENCODE gene, the NONCODE gene with the largest overlap; otherwise the StringTie
+gene id (`gene_name_source` = GENCODE / NONCODE / StringTie, in the tables and in the GTF attributes).
 
 **4. Expression.** featureCounts (reverse-stranded pairs) on GENCODE genes plus the de novo lincRNA loci,
-normalized jointly with pySanity (`apply_sanity_normalization_full_bayesian`, zavolab_pyutils); log2 CPM
-per sample and per cell line with errors.
+normalized jointly with Sanity through [Sanity_utils](https://github.com/nimwegenLab/Sanity_utils)
+(`sanity_normalization`, gene-variance method MAP): log2 CPM-like and, with the exonic lengths, log2 TPM-like
+expression per sample; condition (cell line) means and errors by ISMARA replicate averaging
+(`average_conditions`). The priority score uses log2 TPM in HepG2.
 
 **5. ORFs.** All ATG-initiated ORFs (>= 8 codons) of the selected isoforms are enumerated; for ORFs sharing a
 stop codon the most upstream start with in-frame P-site support is chosen. Periodicity is tested as in the
 HCC Ribo-seq paper (one-sided Wilcoxon rank-sum of per-codon in-frame vs. each off-frame P-site counts,
-combined with Fisher's method), per replicate and pooled. The *island score* is the log2 ratio of the P-site
+combined with Fisher's method), per replicate and pooled. Because this per-codon test has little power for
+short ORFs whose P-sites pile up on a few codons (e.g. the ZFAS1 ORF of the HCC paper), a read-count frame test
+can be added (`frame_test = true`; superseded by the Bayesian test of 5b and off by default): a one-sided binomial test that the in-frame share of the ORF's P-sites exceeds 1/3, applied only if
+frame 0 dominates, >= 3 codons carry in-frame P-sites and >= 45% of the P-sites are in frame. When enabled, the
+periodicity p-value is the smaller of the two (`p_wilcoxon`, `p_frame_count` and `periodicity_test` are reported). The *island score* is the log2 ratio of the P-site
 density in the ORF to that in the rest of the isoform. ORFs found in several isoforms are collapsed.
+
+**5b. Frame preference per read length and Bayesian in-frame test.** Read lengths differ strongly in how well
+they preserve the reading frame. P-sites are therefore also tracked per aligned read length L (25-36 nt; read
+classes that failed the calibration criteria are included here, so that every length can be assessed).
+For each length and sample, frame counts of P-sites in the bodies of canonical protein-coding CDSs (codon 16 to
+5 codons before the stop) give a Dirichlet-multinomial prior alpha_cds(L) of the frame distribution of
+translated ORFs (fitted over genes, so it includes gene-to-gene variation); 3'UTR P-sites give the null
+alpha_null(L). For an ORF with counts n_L = (in-frame, +1, +2) per length:
+
+* H1, translation in the ORF frame: n_L ~ DirMult(alpha_cds(L));
+* H0, mixture of untranslated background, n_L ~ DirMult(alpha_null(L)) (weight 0.5), and translation in
+  another frame, n_L ~ DirMult(alpha_cds(L) rotated by one or two frames) (0.25 each).
+
+Likelihoods are multiplied over lengths, so lengths with poor frame preservation (alpha_cds close to uniform)
+contribute almost no evidence. Reported: log10 Bayes factor and posterior probability (prior 0.5) per sample
+and pooled, Bayes factors against each H0 scenario, the best model, per-length P-site counts, in-frame
+fractions and Bayes factors, the modal read length and the read lengths carrying >= 80% of the ORF's P-sites
+(`support_read_lengths`, `support_read_length_range`). The frequentist read-count frame test introduced
+earlier is superseded by this test and off by default (`frame_test`).
 
 **6. Conservation.** PhyloCSF is quantified exactly as in `HCC_RiboSeq_paper.ipynb`: each ORF segment is
 scored on the PhyloCSF frame track matching its codon phase (cumulative ORF length upstream of the segment;
 minus-strand frames counted from the chromosome end), segments overlapping annotated CDSs are removed
 (`bedtools subtract`), and the median over all positions is reported (likewise PhyloCSF power, PhyloP).
 
-**7. Ranking.** Ribo-seq evidence classes (pooled data):
+**7. Ranking.** Ribo-seq evidence classes (pooled data). Bayesian test: strong = log10 BF >= 2, >= 10 in-frame
+P-sites and >= 2 samples with log10 BF >= 0.5; moderate = log10 BF >= 1 and >= 5 in-frame P-sites; weak =
+log10 BF >= 0.5 and >= 3 in-frame P-sites. The final class is the higher of this and the class from the
+per-codon Wilcoxon test of the paper:
 
 | class | periodicity p | in-frame P-sites | in-frame fraction | replicates with p < 0.05 |
 |:---|:---|:---|:---|:---|
@@ -117,7 +152,7 @@ reads and the periodicity of uniquely mapped reads alone are reported in separat
 (`ribo_evidence_all_reads`, `ribo_evidence_unique_reads`).
 
 Within the classes, ORFs are ordered by a priority score: the weighted mean of percentile ranks of isoform
-MRL (0.25), periodicity -log10 p (0.20), island score (0.10), HepG2 expression (0.20) and PhyloCSF (0.10),
+MRL (0.25), pooled log10 Bayes factor (0.20), island score (0.10), HepG2 expression (0.20) and PhyloCSF (0.10),
 the fraction of P-sites from uniquely mapped reads (0.15), plus peptide evidence (0.05) if peptide tables are
 given. All thresholds and weights are parameters.
 
@@ -127,11 +162,26 @@ proteome are matched to the ORF sequences (I/L-equivalent). `lincORFs.faa` can b
 
 ## How to run
 
+This project is self-contained: nothing from the setup of the main repository README (in particular its conda
+environment) is needed. Requirements:
+
+* the `.env` file with the sciCORE paths, symlinked into the **repository root** (the notebook reads
+  `../Liver_projects.scicore.env`):
+  ```bash
+  ln -s /scicore/home/zavolan/GROUP/Liver_projects/configs/Liver_projects.scicore.env Liver_projects.scicore.env
+  ```
+* a `nextflow` conda environment with Nextflow >= 24 (`conda create -n nextflow -c conda-forge -c bioconda nextflow`);
+* the two pipeline environments below. `lincorfz_py` also includes [Sanity_utils](https://github.com/nimwegenLab/Sanity_utils)
+  (private repository: SSH access to GitHub is needed, or a local clone given as `SANITY_UTILS_SRC`), the C++ Sanity
+  binary, and the packages to run `Liver_lincRNA_ORFs.ipynb`. Use `lincorfz_py` as the notebook kernel (register it
+  once with `<conda_envs>/lincorfz_py/bin/python -m ipykernel install --user --name lincorfz_py`), or execute the
+  notebook as a SLURM job (`sbatch/execute_notebook.sbatch`, see its last section).
+
 1. **Conda environments** (once, on a login node, because compute nodes have no internet access):
    ```bash
+   SANITY_UTILS_SRC=~/libs/Sanity_utils \
    bash lincorfz/setup_conda_envs.sh /scicore/home/zavolan/GROUP/Liver_projects/wf_runs/Liver_lincRNA_ORFs_Claude/conda_envs
    ```
-   A `nextflow` conda environment with Nextflow >= 24 is also required (`conda create -n nextflow -c bioconda nextflow`).
 2. **Inputs and parameters**: run the section "Prepare inputs" of `Liver_lincRNA_ORFs.ipynb`; it writes the sample
    sheets (`inputs/`) and the parameter files (`params/*.json`).
 3. **Run** (the notebook prints this command; execute it on a login node):

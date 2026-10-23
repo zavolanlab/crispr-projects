@@ -71,6 +71,8 @@ workflow {
         build_junctions.out.whitelist, chrom_sizes, chrom_arg
     )
     ribo_bigwigs(ribo_psites.out.bedgraphs.collect(), ribo_psites.out.stats.collect(), chrom_sizes)
+    // read-length-specific priors on the frame distribution (canonical CDSs vs 3'UTRs)
+    frame_priors(ribo_bigwigs.out.bigwigs, ref_gtf, chrom_sizes, chrom_arg)
 
     // ==============================================================================
     // 4. De novo transcriptome assembly and lincRNA selection
@@ -90,18 +92,19 @@ workflow {
     )
 
     // ==============================================================================
-    // 5. Expression of lincRNA loci (featureCounts + pySanity)
+    // 5. Expression of lincRNA loci (featureCounts + Sanity)
     // ==============================================================================
     featurecounts(
         rna_bams.map { _s, b, _i -> b }.collect(), rna_bams.map { _s, _b, i -> i }.collect(),
         ref_gtf, select_lincrnas.out.gtf
     )
-    pysanity(featurecounts.out.reference, featurecounts.out.lincrna, rnaseq_tsv)
+    sanity(featurecounts.out.reference, featurecounts.out.lincrna, rnaseq_tsv)
 
     // ==============================================================================
     // 6. ORF calling and evidence layers
     // ==============================================================================
     call_orfs(select_lincrnas.out.gtf, select_lincrnas.out.tsv, genome, genome_fai, ribo_bigwigs.out.bigwigs)
+    bayes_frame_test(call_orfs.out.length_counts, frame_priors.out.priors)
     polysome_scores(
         polysome_bigwigs.out.bigwigs.collect(), select_lincrnas.out.gtf, call_orfs.out.orfs,
         ref_gtf, chrom_sizes, chrom_arg
@@ -122,9 +125,9 @@ workflow {
     // ==============================================================================
     integrate_and_rank(
         call_orfs.out.orfs, select_lincrnas.out.tsv, select_lincrnas.out.gtf, call_orfs.out.tx_ribo,
-        polysome_scores.out.transcripts, polysome_scores.out.orfs, pysanity.out.lincrna,
-        conservation.out.tsv, peptides_out, ref_gtf, optionalFile(params.hcc_orfs_gtf, 'NO_FILE_hcc'),
-        ribo_labels.join(',')
+        polysome_scores.out.transcripts, polysome_scores.out.orfs, sanity.out.lincrna,
+        conservation.out.tsv, bayes_frame_test.out.tsv, peptides_out, ref_gtf,
+        optionalFile(params.hcc_orfs_gtf, 'NO_FILE_hcc'), ribo_labels.join(',')
     )
     igv_session(integrate_and_rank.out.gtf, ribo_bigwigs.out.bigwigs, polysome_bigwigs.out.bigwigs.collect())
 }
@@ -273,6 +276,9 @@ process ribo_psites {
         --chrom-sizes ${chrom_sizes} \\
         --chromosomes ${chrom_arg} \\
         --max-clip5 ${params.ribo_max_clip5} \\
+        --min-len ${params.ribo_min_len} \\
+        --max-len ${params.ribo_max_len} \\
+        --min-cds-reads-length-tracks ${params.ribo_length_min_cds_reads} \\
         --prefix ${sample}
     """
 }
@@ -280,7 +286,10 @@ process ribo_psites {
 process ribo_bigwigs {
     label 'process_medium_low_cpu'
     label 'env_tools'
-    publishDir "${params.outdir}/riboseq/psite_bigwigs", mode: params.publish_mode
+    // main tracks -> psite_bigwigs/; per-read-length CPM tracks -> psite_bigwigs/by_read_length/;
+    // per-read-length raw counts are only used downstream (frame priors, ORF frame counts)
+    publishDir "${params.outdir}/riboseq/psite_bigwigs", mode: params.publish_mode,
+        saveAs: { fn -> fn.endsWith('.raw.bw') ? null : (fn.contains('.len') ? "by_read_length/${fn}" : fn) }
 
     input:
     path bedgraphs
@@ -294,12 +303,31 @@ process ribo_bigwigs {
     """
     samples=\$(ls *.psite_stats.tsv | sed 's/\\.psite_stats\\.tsv\$//')
     total=0
+    total_len=0
     for s in \$samples; do
         n=\$(awk -F'\\t' '\$1=="psites"{print \$2}' \${s}.psite_stats.tsv)
+        m=\$(awk -F'\\t' '\$1=="psites_all_lengths"{print \$2}' \${s}.psite_stats.tsv)
         total=\$((total + n))
+        total_len=\$((total_len + m))
     done
-    echo "pooled P-sites: \$total"
+    echo "pooled P-sites (main tracks): \$total; all read lengths: \$total_len"
 
+    to_cpm() {  # bedGraph, total, output bigwig
+        awk -F'\\t' -v t=\$2 'BEGIN{OFS="\\t"} {printf "%s\\t%s\\t%s\\t%.6f\\n", \$1,\$2,\$3,\$4*1e6/t}' \$1 > \$1.cpm.tmp
+        bedGraphToBigWig \$1.cpm.tmp ${chrom_sizes} \$3
+        rm \$1.cpm.tmp
+    }
+    sum_union() {  # output bedGraph, inputs...
+        out=\$1; shift
+        if [ \$# -gt 1 ]; then
+            bedtools unionbedg -i "\$@" \\
+                | awk -F'\\t' 'BEGIN{OFS="\\t"} {s=0; for(i=4;i<=NF;i++) s+=\$i; print \$1,\$2,\$3,s}' > \$out
+        else
+            cp \$1 \$out
+        fi
+    }
+
+    # ---- main tracks (read classes that passed the calibration)
     for strand in plus minus; do
         for kind in "" "unique."; do
             sorted=()
@@ -311,22 +339,95 @@ process ribo_bigwigs {
                 fi
             done
             label=\$([ -z "\${kind}" ] && echo pooled || echo pooled_unique)
-            if [ \${#sorted[@]} -gt 1 ]; then
-                bedtools unionbedg -i \${sorted[@]} \\
-                    | awk -F'\\t' 'BEGIN{OFS="\\t"} {s=0; for(i=4;i<=NF;i++) s+=\$i; print \$1,\$2,\$3,s}' > \${label}.\${strand}.bg
-            else
-                cp \${sorted[0]} \${label}.\${strand}.bg
-            fi
+            sum_union \${label}.\${strand}.bg \${sorted[@]}
             bedGraphToBigWig \${label}.\${strand}.bg ${chrom_sizes} \${label}.\${strand}.bw
             if [ "\${label}" = "pooled" ]; then
-                awk -F'\\t' -v t=\$total 'BEGIN{OFS="\\t"} {printf "%s\\t%s\\t%s\\t%.4f\\n", \$1,\$2,\$3,\$4*1e6/t}' \\
-                    pooled.\${strand}.bg > pooled_cpm.\${strand}.bg
-                bedGraphToBigWig pooled_cpm.\${strand}.bg ${chrom_sizes} pooled_cpm.\${strand}.bw
+                to_cpm pooled.\${strand}.bg \$total pooled_cpm.\${strand}.bw
+            fi
+            rm -f \${sorted[@]}
+        done
+    done
+
+    # ---- per aligned read length: raw counts and CPM (scaled by the sample's P-sites over all lengths)
+    for L in \$(ls *.len*.plus.bedGraph | sed -E 's/.*\\.len([0-9]+)\\.plus\\.bedGraph/\\1/' | sort -un); do
+        for strand in plus minus; do
+            sorted=()
+            for s in \$samples; do
+                f=\${s}.len\${L}.\${strand}.bedGraph
+                [ -s \$f ] || continue
+                tot=\$(awk -F'\\t' '\$1=="psites_all_lengths"{print \$2}' \${s}.psite_stats.tsv)
+                LC_ALL=C sort -k1,1 -k2,2n -S 2G \$f > \${s}.len\${L}.\${strand}.sorted.bg
+                bedGraphToBigWig \${s}.len\${L}.\${strand}.sorted.bg ${chrom_sizes} \${s}.len\${L}.\${strand}.raw.bw
+                to_cpm \${s}.len\${L}.\${strand}.sorted.bg \$tot \${s}.len\${L}.\${strand}.cpm.bw
+                sorted+=(\${s}.len\${L}.\${strand}.sorted.bg)
+            done
+            if [ \${#sorted[@]} -gt 0 ]; then
+                sum_union pooled.len\${L}.\${strand}.bg \${sorted[@]}
+                to_cpm pooled.len\${L}.\${strand}.bg \$total_len pooled.len\${L}.\${strand}.cpm.bw
             fi
             rm -f \${sorted[@]}
         done
     done
     rm -f *.bg
+    """
+}
+
+process frame_priors {
+    label 'process_medium'
+    label 'env_py'
+    publishDir "${params.outdir}/riboseq/frame_priors", mode: params.publish_mode
+
+    input:
+    path bigwigs
+    path ref_gtf
+    path chrom_sizes
+    val chrom_arg
+
+    output:
+    path "frame_priors.tsv", emit: priors
+    path "frame_counts_by_length.tsv"
+    path "frame_priors.pdf"
+
+    script:
+    """
+    printf "sample\\tlength\\tstrand\\tpath\\n" > length_tracks.tsv
+    for f in *.len*.plus.raw.bw; do
+        s=\${f%%.len*}
+        L=\$(echo \$f | sed -E 's/.*\\.len([0-9]+)\\.plus\\.raw\\.bw/\\1/')
+        printf "%s\\t%s\\t+\\t%s\\n" "\$s" "\$L" "\$f" >> length_tracks.tsv
+        [ -e \${s}.len\${L}.minus.raw.bw ] && printf "%s\\t%s\\t-\\t%s\\n" "\$s" "\$L" "\${s}.len\${L}.minus.raw.bw" >> length_tracks.tsv
+    done
+    frame_priors.py \\
+        --length-tracks length_tracks.tsv \\
+        --gtf ${ref_gtf} \\
+        --chrom-sizes ${chrom_sizes} \\
+        --chromosomes ${chrom_arg} \\
+        --position-cap ${params.bayes_count_positions ? 1 : 0} \\
+        --window-codons ${params.bayes_window_codons} \\
+        --n-cores ${task.cpus}
+    """
+}
+
+process bayes_frame_test {
+    label 'process_medium_low_cpu'
+    label 'env_py'
+    publishDir "${params.outdir}/orfs", mode: params.publish_mode
+
+    input:
+    path counts
+    path priors
+
+    output:
+    path "orf_frame_bayes.tsv", emit: tsv
+
+    script:
+    """
+    bayes_frame_test.py \\
+        --counts ${counts} \\
+        --priors ${priors} \\
+        --prior-h1 ${params.bayes_prior_h1} \\
+        --w-noise ${params.bayes_w_noise} \\
+        --use ${params.bayes_count_positions ? 'positions' : 'reads'}
     """
 }
 
@@ -493,7 +594,7 @@ process featurecounts {
     """
 }
 
-process pysanity {
+process sanity {
     label 'process_high'
     label 'env_py'
     publishDir "${params.outdir}/expression", mode: params.publish_mode
@@ -509,12 +610,14 @@ process pysanity {
 
     script:
     """
-    run_pysanity.py \\
+    export PYTHONNOUSERSITE=1
+    run_sanity.py \\
         --reference-counts ${ref_counts} \\
         --lincrna-counts ${linc_counts} \\
         --rnaseq-tsv ${rnaseq_tsv} \\
         --min-total-counts ${params.sanity_min_total_counts} \\
-        --n-cores ${task.cpus}
+        --v-method ${params.sanity_v_method} \\
+        --n-threads ${task.cpus}
     """
 }
 
@@ -534,7 +637,9 @@ process call_orfs {
     path "orfs.tsv", emit: orfs
     path "orf_isoforms.tsv", emit: isoforms
     path "transcript_ribo.tsv", emit: tx_ribo
+    path "orf_length_frame_counts.tsv", emit: length_counts
     path "psite_tracks.tsv"
+    path "length_tracks.tsv"
 
     script:
     """
@@ -545,7 +650,15 @@ process call_orfs {
         printf "%s\\t+\\t%s\\n" "\$lab" "\$f" >> psite_tracks.tsv
         printf "%s\\t-\\t%s\\n" "\$lab" "\${lab}.minus.bw" >> psite_tracks.tsv
     done
+    printf "sample\\tlength\\tstrand\\tpath\\n" > length_tracks.tsv
+    for f in *.len*.plus.raw.bw; do
+        s=\${f%%.len*}
+        L=\$(echo \$f | sed -E 's/.*\\.len([0-9]+)\\.plus\\.raw\\.bw/\\1/')
+        printf "%s\\t%s\\t+\\t%s\\n" "\$s" "\$L" "\$f" >> length_tracks.tsv
+        [ -e \${s}.len\${L}.minus.raw.bw ] && printf "%s\\t%s\\t-\\t%s\\n" "\$s" "\$L" "\${s}.len\${L}.minus.raw.bw" >> length_tracks.tsv
+    done
     call_orfs.py \\
+        --length-tracks length_tracks.tsv \\
         --transcripts-gtf ${lincrna_gtf} \\
         --transcripts-tsv ${lincrna_tsv} \\
         --genome ${genome} \\
@@ -671,6 +784,7 @@ process integrate_and_rank {
     path poly_orfs
     path expression
     path cons
+    path bayes
     path peptides
     path ref_gtf
     path hcc_gtf
@@ -693,6 +807,11 @@ process integrate_and_rank {
         --polysome-orfs ${poly_orfs} \\
         --expression ${expression} \\
         --conservation ${cons} \\
+        --bayes ${bayes} \\
+        --bayes-strong ${params.bayes_strong} \\
+        --bayes-moderate ${params.bayes_moderate} \\
+        --bayes-weak ${params.bayes_weak} \\
+        --bayes-rep-support ${params.bayes_rep_support} \\
         ${pep} ${hcc} \\
         --reference-gtf ${ref_gtf} \\
         --replicate-labels ${replicate_labels} \\
@@ -705,6 +824,9 @@ process integrate_and_rank {
         --min-inframe-moderate ${params.min_inframe_moderate} \\
         --p-weak ${params.p_weak} \\
         --min-frac-unique ${params.min_frac_unique} \\
+        --frame-test-min-codons ${params.frame_test_min_codons} \\
+        --frame-test-min-frac-inframe ${params.frame_test_min_frac_inframe} \\
+        ${params.frame_test ? '--frame-test' : ''} \\
         --w-mrl ${params.w_mrl} --w-ribo ${params.w_ribo} --w-island ${params.w_island} \\
         --w-expr ${params.w_expr} --w-cons ${params.w_cons} --w-unique ${params.w_unique} \\
         --w-pep ${params.w_pep} \\
@@ -755,6 +877,18 @@ process igv_session {
     cat > igv_tracks.tsv <<'EOF'
 ${table}
 EOF
+    # P-sites per aligned read length (pooled samples, CPM), one colour per length
+    palette=(31,119,180 255,127,14 44,160,44 214,39,40 148,103,189 140,86,75 227,119,194 127,127,127 188,189,34 23,190,207 0,0,128 128,0,0 0,128,128 128,128,0)
+    for strand in plus minus; do
+        sign=\$([ \$strand = plus ] && echo "+" || echo "-")
+        i=0
+        for L in \$(ls pooled.len*.\${strand}.cpm.bw 2>/dev/null | sed -E 's/pooled\\.len([0-9]+)\\..*/\\1/' | sort -n); do
+            printf "data\\tRibo-seq P-sites by read length (%s strand, pooled CPM)\\tlength %s nt %s\\t%s\\t%s\\t-\\t70\\n" \\
+                "\$sign" "\$L" "\$sign" "${out}/riboseq/psite_bigwigs/by_read_length/pooled.len\${L}.\${strand}.cpm.bw" \\
+                "\${palette[\$((i % \${#palette[@]}))]}" >> igv_tracks.tsv
+            i=\$((i + 1))
+        done
+    done
     make_igv_session.py --genome ${file(params.genome).toAbsolutePath()} --tracks igv_tracks.tsv \\
         --locus ${params.igv_locus} --out lincorfz.igv_session.xml
     """

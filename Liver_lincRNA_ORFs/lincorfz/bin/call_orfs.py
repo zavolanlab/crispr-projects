@@ -19,7 +19,10 @@ for the pooled track additionally
 ORFs with identical genomic CDS structure found in several isoforms are collapsed; the
 representative isoform is the most expressed one (TPM_max).
 
-Outputs: orfs.tsv, orf_isoforms.tsv, transcript_ribo.tsv
+With --length-tracks, P-sites in frames 0/1/2 of every ORF are also counted per sample and aligned
+read length (input of the Bayesian frame test, bayes_frame_test.py).
+
+Outputs: orfs.tsv, orf_isoforms.tsv, transcript_ribo.tsv, orf_length_frame_counts.tsv
 """
 import argparse
 import multiprocessing as mp
@@ -36,13 +39,18 @@ from lincorfz_utils import (STOP_CODONS, bigwig_along_tx, bigwig_chrom_name, blo
 G = {}  # per-worker globals
 
 
-def init_worker(genome, track_table, min_psites):
+def init_worker(genome, track_table, min_psites, length_table):
     G["fasta"] = pysam.FastaFile(genome)
     G["tracks"] = {}
     for r in track_table.itertuples():
         G["tracks"][(r.label, r.strand)] = pyBigWig.open(r.path)
     G["labels"] = list(dict.fromkeys(track_table["label"]))
     G["min_psites"] = min_psites
+    # per-read-length raw P-site tracks: (sample, length, strand) -> bigwig
+    G["ltracks"] = {}
+    if length_table is not None:
+        for r in length_table.itertuples():
+            G["ltracks"][(r.sample, int(r.length), r.strand)] = pyBigWig.open(r.path)
 
 
 def periodicity_p(codon_mat):
@@ -85,7 +93,7 @@ def process_transcript(rec):
                   tx_psites_unique=float(ps["pooled_unique"].sum()))
     out = []
     if tx_total == 0:
-        return out, tx_row
+        return out, tx_row, []
 
     def frame_sums(a, s, e):
         seg = a[s:e]
@@ -153,7 +161,23 @@ def process_transcript(rec):
         row["orf_end1"] = blocks[-1][1]
         row["orf_blocks"] = ";".join(f"{a}-{b}" for a, b in blocks)
         rows.append(row)
-    return rows, tx_row
+    # frame counts of every reported ORF per sample and aligned read length
+    lrows = []
+    if rows and G["ltracks"]:
+        for (sample, rl, st), bw in G["ltracks"].items():
+            if st != strand:
+                continue
+            v = bigwig_along_tx(bw, bigwig_chrom_name(bw, chrom), exons, strand)
+            if v.sum() == 0:
+                continue
+            vp = np.minimum(v, 1.0)   # covered positions
+            for row in rows:
+                s0, e0 = row["tx_start"], row["tx_stop_end"] - 3
+                fr = frame_sums(v, s0, e0).sum(axis=0)
+                if fr.sum() > 0:
+                    fp = frame_sums(vp, s0, e0).sum(axis=0)
+                    lrows.append((tid, s0, row["tx_stop_end"], sample, rl, *map(float, fr), *map(float, fp)))
+    return rows, tx_row, lrows
 
 
 def main():
@@ -163,6 +187,8 @@ def main():
     ap.add_argument("--genome", required=True)
     ap.add_argument("--psite-tracks", required=True,
                     help="TSV: label, strand (+/-), path; labels must include 'pooled' and 'pooled_unique'")
+    ap.add_argument("--length-tracks", default="",
+                    help="TSV: sample, length, strand (+/-), path of per-read-length raw P-site bigwigs")
     ap.add_argument("--min-aa", type=int, default=8)
     ap.add_argument("--start-codons", default="ATG")
     ap.add_argument("--near-cognate-codons", default="", help="e.g. CTG,GTG,TTG (empty = ATG only)")
@@ -182,11 +208,15 @@ def main():
                      args.min_aa, start_set, near))
     print(f"{len(recs)} isoforms")
 
+    ltab = pd.read_csv(args.length_tracks, sep="\t") if args.length_tracks else None
     with mp.Pool(args.n_cores, initializer=init_worker,
-                 initargs=(args.genome, tracks, args.min_psites)) as pool:
+                 initargs=(args.genome, tracks, args.min_psites, ltab)) as pool:
         res = pool.map(process_transcript, recs, chunksize=20)
-    orfs = pd.DataFrame([r for rows, _ in res for r in rows])
-    txr = pd.DataFrame([t for _, t in res])
+    orfs = pd.DataFrame([r for rows, _, _ in res for r in rows])
+    txr = pd.DataFrame([t for _, t, _ in res])
+    lcnt = pd.DataFrame([r for _, _, lr in res for r in lr],
+                        columns=["transcript_id", "tx_start", "tx_stop_end", "sample", "length", "f0", "f1", "f2",
+                                 "pos0", "pos1", "pos2"])
     txr.to_csv("transcript_ribo.tsv", sep="\t", index=False)
     if orfs.empty:
         raise SystemExit("no ORFs with P-site support found")
@@ -206,6 +236,12 @@ def main():
     rep.insert(0, "orf_id", [f"{t}|{s}-{e}" for t, s, e in zip(rep["transcript_id"], rep["tx_start"],
                                                                    rep["tx_stop_end"])])
     rep.to_csv("orfs.tsv", sep="\t", index=False)
+    # per-length frame counts of the representative isoform of each ORF (counts are genomic,
+    # hence identical for all isoforms sharing the ORF)
+    lcnt = lcnt.merge(rep[["transcript_id", "tx_start", "tx_stop_end", "orf_id"]],
+                      on=["transcript_id", "tx_start", "tx_stop_end"], how="inner")
+    lcnt[["orf_id", "sample", "length", "f0", "f1", "f2", "pos0", "pos1", "pos2"]].to_csv(
+        "orf_length_frame_counts.tsv", sep="\t", index=False)
     iso.merge(rep[["orf_key", "orf_id"]], on="orf_key").to_csv("orf_isoforms.tsv", sep="\t", index=False)
     print(f"{len(rep)} unique ORFs with >= {args.min_psites} pooled P-sites")
 
