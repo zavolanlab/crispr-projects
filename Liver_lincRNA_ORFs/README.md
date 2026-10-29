@@ -246,6 +246,18 @@ multimappers; `peptide_mapping/run_peptide_alignment.sbatch`). The workflow runs
 its hard-coded sample names and sample-sheet checksum are patched; its 22-nt read minimum drops 7-residue
 peptides. The resolved BAMs are loaded by a separate IGV session, `lincorfz.igv_session.with_peptides.xml`.
 
+## Non-tryptic peptides: HLA class I immunopeptidomes (notebook section 7.3)
+
+Standard proteomics supports almost only pseudogene ORFs. No public small-protein peptidomics data exist for
+HepG2/Huh7, but two HLA class I immunopeptidomes do: PXD036232 (HepG2, 9 DDA runs) and PXD053264 (Huh7 and
+Huh7 + HLA-C*w1, 17 DDA runs). They are searched with `fragpipe-snakemake` (template
+`Nonspecific-HLA-customDB-groupFDR`, non-specific digestion) against UniProt human (`PE=1`) plus all lincorfz
+ORFs (`PE=2`), so that lincRNA-ORF peptides get their own 1% FDR (group FDR). Peptides absent from all
+canonical, contaminant and GENCODE CDS sequences are reported per ORF
+(`peptidomics/analysis/lincORF_immunopeptide_evidence.tsv`); scores are unchanged. All identified
+immunopeptides are mapped to the genome as in section 7.2 (three libraries: HepG2, Huh7, Huh7-Cw1) and loaded
+together with the tryptic peptide BAMs by `lincorfz.igv_session.with_immunopeptides.xml`.
+
 ## Limitations
 
 * Ribo-seq and polysome profiling are available for HepG2 only; Huh7 contributes expression only.
