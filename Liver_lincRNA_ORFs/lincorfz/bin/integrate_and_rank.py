@@ -23,11 +23,13 @@ Periodicity-test evidence class (pooled replicates; thresholds are parameters):
             in-frame fraction >= --min-frac-inframe-strong, >= --min-reps-strong replicates p < 0.05
   moderate  p < --p-moderate, in-frame P-sites >= --min-inframe-moderate, in-frame fraction >= 0.4
   weak      p < --p-weak, in-frame P-sites >= 3
-  multimapping  any of the above, but < --min-frac-unique of the ORF P-sites come from uniquely
-            mapped reads: the signal is dominated by multimapping reads that were assigned
-            probabilistically (typical for processed pseudogenes, whose reads stem from the parent
-            gene); the all-reads class is kept in 'ribo_evidence_all_reads'
   none      otherwise
+
+Multimapping reads: the input BAMs have multimappers resolved upstream (one alignment per read,
+NH:1, chosen among the tied loci with probabilities from unique-read counts), so all reads count
+towards the evidence class. MAPQ keeps the value of the original alignment (< 255 for reads that
+had several loci); ORFs with < --min-frac-unique of their P-sites from MAPQ 255 reads are only
+flagged in 'resolved_multimapper_dominated' (and in the GTF), not demoted.
 
 Priority score (0..1) = weighted mean of components, each a percentile rank among ORFs with
 Ribo-seq evidence (missing values -> 0, except conservation -> 0.5):
@@ -36,7 +38,7 @@ Ribo-seq evidence (missing values -> 0, except conservation -> 0.5):
   island        log2 P-site density ORF / rest of the isoform              (--w-island)
   expression    Sanity log2 TPM of the locus in --primary-condition        (--w-expr)
   conservation  PhyloCSF median                                            (--w-cons)
-  uniqueness    fraction of ORF P-sites from uniquely mapped reads (raw)   (--w-unique)
+  uniqueness    fraction of ORF P-sites from MAPQ 255 reads (raw)          (--w-unique, 0 = off)
   peptides      1 if a unique peptide was matched (only if peptides given) (--w-pep)
 
 Outputs (prefix lincORFs):
@@ -62,9 +64,9 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 from lincorfz_utils import read_gtf  # noqa: E402
 
-EVIDENCE_ORDER = {"strong": 4, "moderate": 3, "weak": 2, "multimapping": 1, "none": 0}
+EVIDENCE_ORDER = {"strong": 4, "moderate": 3, "weak": 2, "none": 0}
 EVIDENCE_RGB = {"strong": "178,24,43", "moderate": "239,138,98", "weak": "103,169,207",
-                "multimapping": "190,190,190", "none": "150,150,150"}
+                "none": "150,150,150"}
 SMALL_RNA_TYPES = {"snoRNA", "snRNA", "miRNA", "misc_RNA", "scaRNA", "rRNA", "rRNA_pseudogene",
                    "Mt_rRNA", "Mt_tRNA", "vault_RNA", "ribozyme", "scRNA", "sRNA", "Y_RNA"}
 
@@ -164,7 +166,8 @@ def main():
     ap.add_argument("--w-cons", type=float, default=0.10)
     ap.add_argument("--w-unique", type=float, default=0.15)
     ap.add_argument("--w-pep", type=float, default=0.05)
-    ap.add_argument("--gtf-min-evidence", default="weak", choices=list(EVIDENCE_ORDER))
+    # 'multimapping' (former class, now a flag) is accepted as an alias of 'weak'
+    ap.add_argument("--gtf-min-evidence", default="weak", choices=list(EVIDENCE_ORDER) + ["multimapping"])
     ap.add_argument("--prefix", default="lincORFs")
     args = ap.parse_args()
 
@@ -268,9 +271,8 @@ def main():
         ev = np.where(pd.Series(ev_b).map(order).to_numpy() > pd.Series(ev_w).map(order).to_numpy(), ev_b, ev_w)
     else:
         ev = ev_w
-    orfs["ribo_evidence_all_reads"] = ev
-    multi = (ev != "none") & (orfs["frac_psites_unique"].fillna(0) < args.min_frac_unique)
-    orfs["ribo_evidence"] = np.where(multi, "multimapping", ev)
+    orfs["ribo_evidence"] = ev
+    orfs["resolved_multimapper_dominated"] = (ev != "none") & (orfs["frac_psites_unique"].fillna(0) < args.min_frac_unique)
     uf0 = orfs["pooled_unique_f0"]
     orfs["ribo_evidence_unique_reads"] = np.where(
         (orfs["pooled_unique_p_periodicity"] < args.p_moderate) & (uf0 >= args.min_inframe_moderate), "periodic",
@@ -317,7 +319,7 @@ def main():
             "support_read_lengths", "read_lengths_with_inframe_evidence", "pooled_p_periodicity",
             "pooled_p_wilcoxon", "pooled_p_frame_count", "pooled_codons_inframe", "n_reps_p05",
             "ribo_evidence_periodicity_test", "ribo_evidence_bayes", "island_log2ratio", "frac_tx_psites_in_orf",
-            "frac_psites_unique", "ribo_evidence_all_reads", "ribo_evidence_unique_reads", "gene_name_source",
+            "frac_psites_unique", "resolved_multimapper_dominated", "ribo_evidence_unique_reads", "gene_name_source",
             "PhyloCSF_Median",
             "PhyloCSF_Power_Median"]
     lead = [c for c in lead if c in orfs.columns]
@@ -328,7 +330,7 @@ def main():
     print(orfs["ribo_evidence"].value_counts().to_string())
 
     # ---------------------------------------------------------------- GTF / BED / FASTA
-    sel = orfs.loc[orfs["evidence_rank"] >= EVIDENCE_ORDER[args.gtf_min_evidence]]
+    sel = orfs.loc[orfs["evidence_rank"] >= EVIDENCE_ORDER.get(args.gtf_min_evidence, EVIDENCE_ORDER["weak"])]
     tex = read_gtf(args.transcripts_gtf, features={"exon"}, keys=("transcript_id",))
     tex_by = {t: g.sort_values("start0") for t, g in tex.groupby("transcript_id")}
     lines = []
@@ -358,6 +360,7 @@ def main():
              "inframe_psites": int(r.pooled_f0), "codons_inframe": int(r.pooled_codons_inframe),
              "frac_inframe": f"{r.pooled_frac_inframe:.2f}", "island_log2ratio": f"{r.island_log2ratio:.2f}",
              "frac_psites_unique": f"{r.frac_psites_unique:.2f}" if pd.notna(r.frac_psites_unique) else "NA",
+             "resolved_multimapper_dominated": str(bool(r.resolved_multimapper_dominated)),
              "MRL": f"{r.MRL:.2f}" if pd.notna(r.MRL) else "NA",
              "MRL_pct_vs_mRNA": f"{r.MRL_pct_vs_mRNA:.2f}" if pd.notna(r.MRL_pct_vs_mRNA) else "NA",
              "expression_" + prim.split("_")[0]: f"{getattr(r, prim):.2f}" if prim in sel and pd.notna(getattr(r, prim)) else "NA",
@@ -401,7 +404,7 @@ def main():
                                           ("PhyloCSF_Median", "PhyloCSF median"), ("priority_score", "priority score")]):
         if col not in orfs:
             continue
-        for e in ["strong", "moderate", "weak", "multimapping", "none"]:
+        for e in ["strong", "moderate", "weak", "none"]:
             v = orfs.loc[orfs["ribo_evidence"] == e, col].dropna()
             if col == "pooled_p_periodicity":
                 v = -np.log10(v.clip(lower=1e-50))

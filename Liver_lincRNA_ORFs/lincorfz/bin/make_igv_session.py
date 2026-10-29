@@ -4,7 +4,7 @@ Write an IGV (desktop) session XML that loads the lincorfz outputs together with
 supporting tracks, using absolute paths (the session works from any location on the cluster).
 
 Track table (--tracks, TSV) columns:
-  panel     'data' or 'feature'
+  panel     'data', 'feature' or 'alignment' (BAM: own panel with coverage and alignment track)
   group     overlay name (tracks with the same group are merged into one overlay track) or '-'
   name      display name
   path      absolute path (bigWig, GTF, BED, BAM)
@@ -69,6 +69,16 @@ def main():
         feat_xml.append(f'<Track attributeKey={quoteattr(r["name"])} clazz="org.broad.igv.track.FeatureTrack" '
                         f'displayMode="EXPANDED" fontSize="12" groupByStrand="false" id={quoteattr(r["path"])} '
                         f'name={quoteattr(r["name"])} visible="true"/>')
+    aln_xml = []
+    for _, r in t.loc[t["panel"] == "alignment"].iterrows():
+        p, n = r["path"], r["name"]
+        aln_xml.append(f'    <Panel name={quoteattr(n + " panel")}>\n'
+                       f'<Track attributeKey={quoteattr(n + " Coverage")} autoScale="true" '
+                       f'clazz="org.broad.igv.sam.CoverageTrack" color={quoteattr(r["color"])} fontSize="10" '
+                       f'id={quoteattr(p + "_coverage")} name={quoteattr(n + " Coverage")} visible="true"/>\n'
+                       f'<Track attributeKey={quoteattr(n)} clazz="org.broad.igv.sam.AlignmentTrack" '
+                       f'displayMode="EXPANDED" fontSize="10" id={quoteattr(p)} name={quoteattr(n)} visible="true">\n'
+                       f'<RenderOptions colorOption="READ_STRAND"/>\n</Track>\n    </Panel>')
     xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <Session genome={quoteattr(args.genome)} locus={quoteattr(args.locus)} version="8">
     <Resources>
@@ -77,6 +87,7 @@ def main():
     <Panel name="DataPanel">
 {chr(10).join(data_xml)}
     </Panel>
+{chr(10).join(aln_xml)}
     <Panel name="FeaturePanel">
 {chr(10).join(feat_xml)}
     </Panel>

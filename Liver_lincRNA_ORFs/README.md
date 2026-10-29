@@ -166,18 +166,21 @@ per-codon Wilcoxon test of the paper:
 | strong | < 1e-3 | >= 10 | >= 0.5 | >= 2 |
 | moderate | < 1e-2 | >= 5 | >= 0.4 | - |
 | weak | < 0.05 | >= 3 | - | - |
-| multimapping | any of the above, but < 10% of the ORF's P-sites come from uniquely mapped reads | | | |
 
-The *multimapping* class captures ORFs whose Ribo-seq signal consists of multimapping reads that were assigned
-probabilistically; this is typical for processed pseudogenes (e.g. ribosomal protein pseudogenes), whose
-reads stem from the parent gene, and also applies to FRG1BP (paralogous FRG1 family). The class based on all
-reads and the periodicity of uniquely mapped reads alone are reported in separate columns
-(`ribo_evidence_all_reads`, `ribo_evidence_unique_reads`).
+Multimapping Ribo-seq reads are resolved upstream (`NF_pre-rRNA` workflow of the RNA_oxidation repository):
+every read keeps one alignment (`NH:1`), chosen among the loci tied by edit distance with probabilities
+proportional to their unique-read counts (tags `ZH` = number of candidate loci, `ZP` = selection probability).
+All reads therefore count towards the evidence class. Only the MAPQ of the original STAR alignment is kept
+(< 255 for reads that had several loci, useful for visual inspection in IGV). ORFs with < 10% of their P-sites
+from MAPQ 255 reads (e.g. FRG1BP, paralogous FRG1 family, or processed pseudogenes) are flagged in
+`resolved_multimapper_dominated` but keep their class; the periodicity of MAPQ 255 reads alone is reported in
+`ribo_evidence_unique_reads`.
 
 Within the classes, ORFs are ordered by a priority score: the weighted mean of percentile ranks of isoform
 MRL (0.25), pooled log10 Bayes factor (0.20), island score (0.10), HepG2 expression (0.20) and PhyloCSF (0.10),
-the fraction of P-sites from uniquely mapped reads (0.15), plus peptide evidence (0.05) if peptide tables are
-given. All thresholds and weights are parameters.
+plus peptide evidence (0.05) if peptide tables are given. The fraction of P-sites from MAPQ 255 reads can be
+added as a component (`w_unique`, 0 by default, since multimappers are resolved upstream). All thresholds and
+weights are parameters.
 
 **8. Optional peptide evidence.** With `peptide_tables` (TSV/CSV with a peptide column, e.g. FragPipe
 `peptide.tsv` from non-tryptic small-peptidome searches), identified peptides absent from the GENCODE
@@ -223,12 +226,32 @@ environment) is needed. Requirements:
 The pipeline can also be run directly (`nextflow run lincorfz/main.nf -params-file params.json -profile conda`);
 see `lincorfz/nextflow.config` for all parameters and their defaults.
 
+## Peptide evidence from HepG2 proteomics (notebook section 7.1)
+
+Total proteomics of the same HepG2 cultures (DMEM, time 0; MassIVE MSV000096514, runs
+`001/002/003_HP-0057_D23` according to Supplementary Table S1 of the data descriptor) is searched with the lab's
+FragPipe Snakemake workflow ([zavolanlab/fragpipe-snakemake](https://github.com/zavolanlab/fragpipe-snakemake),
+private; FragPipe 24.0, DIA template `DIA_SpecLib_Quant`) against the UniProt human proteome plus the protein
+sequences of all ORFs called by lincorfz. The notebook prints the commands (download over HTTPS, conda
+environment pre-build, `sbatch/run_fragpipe_snakemake.sbatch`). Outputs go to `<OUT>/proteomics/`.
+A peptide is evidence for a lincRNA ORF only if it is absent from all canonical human and contaminant proteins
+and from the translations of all GENCODE v42 CDSs (I = L). The results are an annotation
+(`proteomics/analysis/lincORF_peptide_evidence.tsv`); they do not change the ranking or the priority score.
+
+**All identified peptides on the genome (notebook section 7.2).** Each peptide is converted into the RNA
+sequence(s) that encode it (all GENCODE CDSs and lincorfz ORFs containing it;
+`peptide_mapping/peptides_to_rna_reads.py`), one read library per proteomics run, and aligned with the Ribo-seq
+alignment workflow of the RNA_oxidation repository (`NF_pre-rRNA`, including the probabilistic resolution of
+multimappers; `peptide_mapping/run_peptide_alignment.sbatch`). The workflow runs from a working copy in which only
+its hard-coded sample names and sample-sheet checksum are patched; its 22-nt read minimum drops 7-residue
+peptides. The resolved BAMs are loaded by a separate IGV session, `lincorfz.igv_session.with_peptides.xml`.
+
 ## Limitations
 
 * Ribo-seq and polysome profiling are available for HepG2 only; Huh7 contributes expression only.
-* Multimapping Ribo-seq reads were assigned probabilistically upstream of this pipeline. ORFs whose signal is
-  dominated by such reads are put in the `multimapping` class; they are listed in the tables but, by default,
-  not in the GTF (set `gtf_min_evidence` to `multimapping` to include them).
+* Multimapping Ribo-seq reads were resolved upstream of this pipeline. For ORFs flagged
+  `resolved_multimapper_dominated`, the P-sites at the ORF depend on that resolution (reads shared with
+  paralogs or the parent gene of a pseudogene); the flag is also an attribute in the GTF.
 * ORFs overlapping snoRNAs or other small RNAs are flagged (`orf_overlaps_small_RNA`): small-RNA fragments
   can contaminate Ribo-seq libraries.
 * Mono-exonic assembled transcripts are kept only when highly expressed, but can still be pre-mRNA or
