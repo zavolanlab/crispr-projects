@@ -64,3 +64,8 @@ Thumbs.db
 WF/.java/
 WF/.cache/
 
+
+# ========================
+# Claude Code session logs (may contain cluster paths)
+# ========================
+Claude_session_*.txt

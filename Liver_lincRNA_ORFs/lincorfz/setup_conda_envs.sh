@@ -11,7 +11,7 @@
 # binary, built with a portable architecture flag so that it runs on all cluster nodes.
 #
 # usage: bash setup_conda_envs.sh <conda_envs_dir>
-#        SANITY_UTILS_SRC=~/libs/Sanity_utils bash setup_conda_envs.sh <conda_envs_dir>
+#        SANITY_UTILS_SRC=<local clone of Sanity_utils> bash setup_conda_envs.sh <conda_envs_dir>
 set -euo pipefail
 
 if [ $# -ne 1 ]; then

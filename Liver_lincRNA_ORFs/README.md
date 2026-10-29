@@ -11,11 +11,34 @@ The analysis consists of
   files, prints the `sbatch` commands and inspects/visualizes the results,
 * **`sbatch/run_lincorfz.sbatch`**: the SLURM job that runs the Nextflow driver.
 
-All results are written to `/scicore/home/zavolan/GROUP/Liver_projects/wf_runs/Liver_lincRNA_ORFs_Claude/`.
+All results are written to `${WF_RUNS_DIR}Liver_lincRNA_ORFs_Claude/`. Cluster paths are never written in this
+repository: they come from the `.env` file in the repository root (`Liver_projects.scicore.env`, not tracked by git;
+see below). The shell commands below load it first, from within `Liver_lincRNA_ORFs/`:
+```bash
+set -a; source ../Liver_projects.scicore.env; set +a     # defines WF_RUNS_DIR, MAIN_PROJECT_DIR, ...
+OUT=${WF_RUNS_DIR}Liver_lincRNA_ORFs_Claude             # output directory of this project
+```
+
+## Which conda environment runs the notebook
+
+Use the pipeline's Python environment **`lincorfz_py`** as the Jupyter kernel of `Liver_lincRNA_ORFs.ipynb`
+(not the environment of the main repository README). It is built together with the pipeline by
+`lincorfz/setup_conda_envs.sh` and lives at `$OUT/conda_envs/lincorfz_py`.
+Register it as a kernel once (e.g. on a login node), then select "lincorfz_py" in Jupyter / VS Code:
+```bash
+PYTHONNOUSERSITE=1 $OUT/conda_envs/lincorfz_py/bin/python \
+    -m ipykernel install --user --name lincorfz_py --display-name "lincorfz_py"
+```
+Alternatively, execute the whole notebook as a SLURM job with `sbatch/execute_notebook.sbatch` (last section of the
+notebook), which uses the same environment. The bash/`sbatch` commands printed by the notebook need the
+`nextflow` conda environment only for the pipeline driver (activated inside `sbatch/run_lincorfz.sbatch`).
 
 ## What the pipeline produces
 
-The main deliverable is a GTF in hg38 coordinates for IGV, `results/final/lincORFs.igv.gtf`, containing
+The results of `lincorfz/` executions are written into `$MAIN_PROJECT_DIR`/wf_runs/Liver_lincRNA_ORFs_Claude/runs/, with subdirectories corresponding to specific versions of executions.
+
+The main deliverable is a GTF in hg38 coordinates for IGV browser, `/results/final/lincORFs.igv.gtf`, for example:
+`$MAIN_PROJECT_DIR`/wf_runs/Liver_lincRNA_ORFs_Claude/runs/v2/results/final/lincORFs.igv.gtf
 
 * every expressed, de novo assembled lincRNA isoform (`transcript_type "lincRNA_isoform"`), and
 * every ORF with Ribo-seq support (`transcript_type "lincRNA_ORF"`), drawn on its isoform: exons, `CDS`,
@@ -168,28 +191,27 @@ environment) is needed. Requirements:
 * the `.env` file with the sciCORE paths, symlinked into the **repository root** (the notebook reads
   `../Liver_projects.scicore.env`):
   ```bash
-  ln -s /scicore/home/zavolan/GROUP/Liver_projects/configs/Liver_projects.scicore.env Liver_projects.scicore.env
+  ln -s <path to the shared Liver_projects.scicore.env> Liver_projects.scicore.env   # in the repository root
   ```
 * a `nextflow` conda environment with Nextflow >= 24 (`conda create -n nextflow -c conda-forge -c bioconda nextflow`);
 * the two pipeline environments below. `lincorfz_py` also includes [Sanity_utils](https://github.com/nimwegenLab/Sanity_utils)
-  (private repository: SSH access to GitHub is needed, or a local clone given as `SANITY_UTILS_SRC`), the C++ Sanity
+  (private repository: SSH access to GitHub is needed, or the path of a local clone given as `SANITY_UTILS_SRC`), the C++ Sanity
   binary, and the packages to run `Liver_lincRNA_ORFs.ipynb`. Use `lincorfz_py` as the notebook kernel (register it
   once with `<conda_envs>/lincorfz_py/bin/python -m ipykernel install --user --name lincorfz_py`), or execute the
   notebook as a SLURM job (`sbatch/execute_notebook.sbatch`, see its last section).
 
 1. **Conda environments** (once, on a login node, because compute nodes have no internet access):
    ```bash
-   SANITY_UTILS_SRC=~/libs/Sanity_utils \
-   bash lincorfz/setup_conda_envs.sh /scicore/home/zavolan/GROUP/Liver_projects/wf_runs/Liver_lincRNA_ORFs_Claude/conda_envs
+   bash lincorfz/setup_conda_envs.sh $OUT/conda_envs     # optionally: SANITY_UTILS_SRC=<local clone> bash ...
    ```
 2. **Inputs and parameters**: run the section "Prepare inputs" of `Liver_lincRNA_ORFs.ipynb`; it writes the sample
    sheets (`inputs/`) and the parameter files (`params/*.json`).
 3. **Run** (the notebook prints this command; execute it on a login node):
    ```bash
-   RUN=/scicore/home/zavolan/GROUP/Liver_projects/wf_runs/Liver_lincRNA_ORFs_Claude/runs/v1
+   RUN=$OUT/runs/v2
    mkdir -p $RUN/slurm_logs
    sbatch --output=$RUN/slurm_logs/driver_%j.out --error=$RUN/slurm_logs/driver_%j.err \
-       sbatch/run_lincorfz.sbatch <params/v1.json> $RUN $(pwd)/lincorfz
+       sbatch/run_lincorfz.sbatch $OUT/params/v2.json $RUN $(pwd)/lincorfz
    ```
    Re-submitting the same command resumes the run (`-resume`). Note that Nextflow does not notice edits of
    the scripts in `lincorfz/bin/`: after changing a script, delete the run's `work/` directory (or the work

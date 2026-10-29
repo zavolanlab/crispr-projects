@@ -50,6 +50,10 @@ def main():
     res = "\n".join(f'        <Resource path={quoteattr(p)} type={quoteattr(p.rsplit(".", 1)[-1])}/>'
                     for p in t["path"])
     data_xml, feat_xml = [], []
+    # reference sequence with three-frame translation (+ strand; click the strand arrow in IGV to switch)
+    feat_xml.append('<Track attributeKey="Reference sequence" clazz="org.broad.igv.track.SequenceTrack" '
+                    'fontSize="10" id="Reference sequence" name="Reference sequence" '
+                    'sequenceTranslationStrandValue="POSITIVE" shouldShowTranslation="true" visible="true"/>')
     group_id = 0
     for g, sub in t.loc[t["panel"] == "data"].groupby("group", sort=False):
         if g == "-":
