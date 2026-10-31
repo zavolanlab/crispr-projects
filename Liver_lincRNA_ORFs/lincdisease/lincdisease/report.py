@@ -5,7 +5,7 @@ Per ORF: QC flags and tier, copy-attribution confidence, the locus' disease comp
 actionability score, mechanism class scores, shares and dominant class.
 Actionability (per ORF) = equal-weight composite of the percentiles (among all ORFs) of the locus' tumour
 specificity, the number of lincORF-specific HLA-I peptides and predicted HLA-I binding (missing until MHCflurry
-predictions are added).
+presentation (MHCflurry, distinct binder peptides over the HepG2, Huh7 and common alleles).
 """
 import numpy as np
 import pandas as pd
@@ -15,11 +15,12 @@ from . import scoring
 ACTIONABILITY = ["tumour_specificity", "n_hla_specific", "hla_binding"]
 
 
-def actionability(orfs, disease_loci, peptides):
+def actionability(orfs, disease_loci, peptides, hla_table=None):
     f = pd.DataFrame(index=orfs.index)
     f["tumour_specificity"] = orfs["locus_id"].map(disease_loci["tumour_specificity"]).to_numpy()
     f["n_hla_specific"] = orfs["orf_id"].map(peptides["n_hla_specific"]).fillna(0).to_numpy()
-    f["hla_binding"] = np.nan
+    f["hla_binding"] = (orfs["orf_id"].map(hla_table["hla_any_n_binders"]).astype(float).to_numpy()
+                        if hla_table is not None else np.nan)
     pct = scoring.component_percentiles(f, f, ACTIONABILITY)
     res = scoring.composite(pct, dict.fromkeys(ACTIONABILITY, 1.0))
     return pd.concat([f.add_prefix("act_"), pct.add_prefix("act_pct_"),
@@ -50,7 +51,7 @@ def _row(feature, score, value, expectation, passed):
             "pass": passed if passed is not None else np.nan}
 
 
-def control_report(disease_loci, mech_by_locus_name):
+def control_report(disease_loci, mech_by_locus_name, hla_control=None):
     """Check the control expectations of LOGIC.md Step 5 that the current inputs can evaluate."""
     d = disease_loci
     g = lambda gene, col: d.loc[f"ctrl:{gene}", col] if f"ctrl:{gene}" in d.index else np.nan
@@ -96,7 +97,12 @@ def control_report(disease_loci, mech_by_locus_name):
             rows.append(_row(gene, col, f"{g(gene, col):.3f} (90th pct {bg90:.3f})",
                              "> 90th percentile of the background", g(gene, col) > bg90))
     rows.append(_row("GPC3", "actionability", f"tumour specificity {g('GPC3', 'tumour_specificity'):.2f}",
-                     "tumour-specific (> 0); HLA binding not evaluated", g("GPC3", "tumour_specificity") > 0))
+                     "tumour-specific (> 0)", g("GPC3", "tumour_specificity") > 0))
+    if hla_control is not None and len(hla_control):
+        h = hla_control.iloc[0]
+        rows.append(_row("GPC3", "actionability", f"{h['peptide']} {h['allele']}: {h['affinity']:.0f} nM, presentation "
+                                                  f"pct {h['presentation_percentile']:.2f}",
+                         "predicted binder (presentation percentile <= 2)", h["presentation_percentile"] <= 2))
 
     expected = {"M1": ["MTLN", "SPAAR"], "M2": ["GAS5", "ZFAS1"], "M3": ["HNF1A-AS1", "LINC00261"],
                 "M4": ["MALAT1", "NEAT1"], "M5": ["NORAD"], "M6": ["SNHG1", "MIR22HG"]}

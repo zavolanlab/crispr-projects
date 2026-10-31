@@ -24,8 +24,8 @@ import pandas as pd
 from . import quant, scoring
 
 CLASSES = {
-    "M1": ["m1_translation", "m1_orf_share", "m1_peptides", "m1_phylocsf_weighted", "m1_length",
-           "m1_orf_vs_exon_conservation", "m1_sequence_features", "m1_crispr_screen"],
+    "M1": ["m1_translation", "m1_orf_share", "m1_peptides", "m1_independent_translation", "m1_phylocsf_weighted",
+           "m1_length", "m1_orf_vs_exon_conservation", "m1_sequence_features", "m1_crispr_screen"],
     "M2": ["m2_nmd", "m2_other_translated_orfs", "m2_upf1_kd"],
     "M3": ["m3_neighbour_position", "m3_low_polysome", "m3_coexpression", "m3_nuclear", "m3_enhancer_chromatin"],
     "M4": ["m4_copy_number", "m4_no_cis", "m4_nuclear", "m4_eclip_nuclear"],
@@ -211,10 +211,11 @@ def small_rna_hosts(loci_tx, small_rnas):
 # ---------------------------------------------------------------- features and scores
 
 def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=None, encode=None, eclip=None,
-             chromatin=None):
+             chromatin=None, peptide_feats=None):
     """
     Raw feature values per ORF (index of `orfs`). `coexpr`: locus -> co-expression excess (coexpression);
-    `encode`, `eclip`, `chromatin`: locus tables of encode.features, eclip.features, chromatin.features.
+    `encode`, `eclip`, `chromatin`: locus tables of encode.features, eclip.features, chromatin.features;
+    `peptide_feats`: ORF table (index orf_id) of the `peptide` step.
     """
     f = pd.DataFrame(index=orfs.index)
     num = lambda c: pd.to_numeric(orfs[c], errors="coerce")
@@ -248,6 +249,12 @@ def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=No
     f["m3_enhancer_chromatin"] = locus(chromatin, "enhancer_score")
     f["m4_eclip_nuclear"] = locus(eclip, "eclip_nuclear_enrichment")
     f["m5_eclip_cytoplasmic"] = locus(eclip, "eclip_cytoplasmic_enrichment")
+    if peptide_feats is not None:
+        pf = peptide_feats.reindex(orfs["orf_id"])
+        col = lambda c: pf[c].astype(float).to_numpy()
+        f["m1_independent_translation"] = col("gencode_riboseq_orf") + col("gencode_riboseq_peptide_support")
+        structured = (col("pep_tm_segments") > 0) | (col("pep_signal_like") > 0) | (col("pfam_n_domains") > 0)
+        f["m1_sequence_features"] = 0.5 * structured + 0.5 * (1 - col("pep_frac_disordered"))
     return f
 
 

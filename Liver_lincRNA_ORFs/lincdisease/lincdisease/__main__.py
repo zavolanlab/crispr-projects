@@ -3,6 +3,7 @@ Command-line driver of lincdisease; one sub-command per step of LOGIC.md, each w
 
   python -m lincdisease qc       --results-dir R --candidates T --data-dir D --peptides-dir P --out-dir O
   python -m lincdisease homology --results-dir R --candidates T --data-dir D --out-dir O [--diamond PATH]
+  python -m lincdisease peptide  --results-dir R --candidates T --data-dir D --out-dir O --tool-env ENV
   python -m lincdisease regions  --results-dir R --candidates T --data-dir D --out-dir O
   python -m lincdisease manifest --out-dir O [--gtex-per-tissue 10]
   python -m lincdisease quant    --out-dir O --project LIHC [--worker 0 --n-workers 4] [--scratch S]
@@ -28,7 +29,7 @@ import glob
 import json
 
 from . import (chromatin, chronic, controls, disease, eclip, encode, eqtl, genetics, homology, inputs, integrate,
-               literature, mechanism, qc, quant, report, resources, somatic, weights)
+               hla, literature, mechanism, peptide, qc, quant, report, resources, somatic, weights)
 from . import scoring
 
 
@@ -83,6 +84,33 @@ def cmd_homology(args):
     path = os.path.join(args.out_dir, "homology.orfs.tsv")
     res.to_csv(path, sep="\t")
     print(f"wrote {path}: with homolog {res['parent'].notna().sum()}, with Ka/Ks {res['kaks'].notna().sum()}")
+
+
+def cmd_peptide(args):
+    """M1 sequence features (TM, signal-like, Pfam, disorder), GENCODE Ribo-seq ORF matches, MHCflurry HLA-I
+    presentation. hmmsearch, metapredict and MHCflurry run in a separate environment (--tool-env)."""
+    orfs = inputs.load(args.results_dir, args.candidates)
+    env = os.path.join(args.tool_env, "bin")
+    out = orfs[["orf_id"]].join(peptide.sequence_features(orfs))
+    rd = os.path.join(args.data_dir, "riboseq_orfs")
+    p2 = peptide.read_bed12(os.path.join(rd, "phase2", "Ribo-seq_ORFs.comprehensive.bed"))
+    p1 = peptide.read_bed12(os.path.join(rd, "phase1", "Ribo-seq_ORFs.peptideins.bed"))
+    out["gencode_riboseq_orfs"] = peptide.same_stop(orfs, p2)
+    out["gencode_riboseq_orf"] = out["gencode_riboseq_orfs"] != ""
+    out["gencode_riboseq_peptide_support"] = peptide.same_stop(orfs, p1) != ""
+    seqs = orfs.set_index("orf_id")["aa_seq"].fillna("").str.rstrip("*")
+    pf = peptide.pfam(seqs, os.path.join(env, "hmmsearch"), os.path.join(args.data_dir, "Pfam-A.hmm"), cpu=args.threads)
+    out = out.join(pf, on="orf_id")
+    out["pfam_n_domains"] = out["pfam_n_domains"].fillna(0).astype(int)
+    out["pfam_domains"] = out["pfam_domains"].fillna("")
+    out = out.join(peptide.disorder(seqs, os.path.join(env, "python")).add_prefix("pep_"), on="orf_id")
+    out.to_csv(os.path.join(args.out_dir, "peptide_features.orfs.tsv"), sep="\t", index=False)
+    print(f"peptide features: Ribo-seq catalog {out['gencode_riboseq_orf'].sum()}, Pfam {(out['pfam_n_domains'] > 0).sum()}")
+    if args.skip_hla:
+        return
+    menv = {"MHCFLURRY_DATA_DIR": os.path.join(args.data_dir, "mhcflurry")}
+    res = hla.run(orfs, os.path.join(env, "python"), os.path.join(args.out_dir, "hla.orfs.tsv"), env=menv)
+    print(f"HLA: ORFs with >= 1 binder {(res['hla_any_n_binders'] > 0).sum()} of {len(res)}")
 
 
 def cmd_regions(args):
@@ -301,7 +329,9 @@ def cmd_mechanism(args):
                                    gencode, resources.read_wgrna(args.data_dir))),
                                coexpr["coexpr_excess"],
                                *(pd.read_csv(os.path.join(args.out_dir, f"{t}.loci.tsv"), sep="\t", index_col=0)
-                                 for t in ("encode", "eclip", "chromatin")))
+                                 for t in ("encode", "eclip", "chromatin")),
+                               peptide_feats=pd.read_csv(os.path.join(args.out_dir, "peptide_features.orfs.tsv"),
+                                                         sep="\t", index_col=0))
     res = mechanism.class_table(feats, pd.Series(True, index=orfs.index))
     out = pd.concat([orfs[["orf_id", "orf_label", "locus_id", "locus_name", "is_candidate"]],
                      feats.add_prefix("raw_"), res], axis=1)
@@ -402,13 +432,13 @@ def cmd_report(args):
     mech = read("mechanism.orfs.tsv").set_index("orf_id").reindex(orfs["orf_id"]).set_axis(orfs.index)
     dis = read("disease.loci.tsv", index_col=0)
     peptides = read("peptides.orfs.tsv", index_col=0)
-    act = report.actionability(orfs, dis, peptides)
+    act = report.actionability(orfs, dis, peptides, read("hla.orfs.tsv", index_col=0))
     table = report.orf_table(orfs, qct, dis, mech, act)
     table.to_csv(os.path.join(args.out_dir, "lincdisease.orfs.tsv"), sep="\t", index=False)
     cand = table[table["is_candidate"]].sort_values(["disease_score", "priority_score"], ascending=False)
     cand.to_csv(os.path.join(args.out_dir, "lincdisease.candidates.tsv"), sep="\t", index=False)
     by_name = mech.assign(rank=orfs["rank"]).sort_values("rank").drop_duplicates("locus_name").set_index("locus_name")
-    ctrl = report.control_report(dis, by_name)
+    ctrl = report.control_report(dis, by_name, read("hla.control.tsv"))
     ctrl.to_csv(os.path.join(args.out_dir, "controls.tsv"), sep="\t", index=False)
     print(ctrl.to_string(index=False))
     print(f"wrote lincdisease.orfs.tsv, lincdisease.candidates.tsv, controls.tsv to {args.out_dir}")
@@ -431,6 +461,13 @@ def main():
     hm.add_argument("--diamond", default="diamond")
     hm.add_argument("--threads", type=int, default=4)
     hm.set_defaults(func=cmd_homology)
+
+    pp = sub.add_parser("peptide", help="Step 4 M1 sequence features and actionability HLA-I presentation")
+    _common(pp)
+    pp.add_argument("--tool-env", required=True, help="conda env with hmmer, metapredict and mhcflurry")
+    pp.add_argument("--threads", type=int, default=4)
+    pp.add_argument("--skip-hla", action="store_true")
+    pp.set_defaults(func=cmd_peptide)
 
     r = sub.add_parser("regions", help="Step 2: quantifiable exonic regions of loci and controls")
     _common(r)

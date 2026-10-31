@@ -109,8 +109,9 @@ Default weights: D1 0.25, D2 0.25, D3 0.20, D4 0.10, D5 0.10, D6 0.10. Reported 
 
 **Actionability score** (per ORF, separate from the disease score): equal-weight composite of the percentiles
 (among all ORFs) of tumour-specific expression of the locus (median in TCGA-LIHC primary tumours minus the
-largest median over GTEx tissues except testis), predicted HLA class I binding (MHCflurry; HepG2/Huh7 HLA types
-and common alleles), and the number of lincORF-specific HLA-I immunopeptides (`lincorfz` notebook section 7.3).
+largest median over GTEx tissues except testis), predicted HLA class I presentation (MHCflurry 2 presentation
+percentile <= 2, distinct 8-11-mer binders over HepG2 A*02:01, A*24:02, B*35:14, B*51:01, C*04:01, C*16:02, Huh7
+A*11:01, B*54:01, C*01:02 (Cellosaurus) and 16 common alleles, each scored on its own), and the number of lincORF-specific HLA-I immunopeptides (`lincorfz` notebook section 7.3).
 
 ## Step 4. Mechanism classes (per ORF, with locus-level features)
 
@@ -132,7 +133,7 @@ dominant only if its share exceeds the next one by >= 0.05.
 
 | Class | Features |
 |:---|:---|
-| M1 Encoded peptide | Translation strength (pooled log10 Bayes factor) and fraction of the transcript's P-sites in the ORF (`lincorfz`); identified peptides (proteomics peptides absent from canonical proteins, plus lincORF-specific immunopeptides); independent translation evidence (GENCODE Ribo-seq ORFs, OpenProt); PhyloCSF weighted by copy-attribution confidence (0.5 + (percentile - 0.5) x confidence); ORF vs non-ORF exon conservation; transmembrane, signal-peptide, Pfam features; low predicted disorder; length; hits in published sORF frameshift CRISPR screens |
+| M1 Encoded peptide | Translation strength (pooled log10 Bayes factor) and fraction of the transcript's P-sites in the ORF (`lincorfz`); identified peptides (proteomics peptides absent from canonical proteins, plus lincORF-specific immunopeptides); independent translation evidence: same stop codon as an ORF of the GENCODE Ribo-seq ORF catalog (phase 2 comprehensive, v45), +1 if it matches a phase 1 ORF with peptide support (OpenProt not used); PhyloCSF weighted by copy-attribution confidence (0.5 + (percentile - 0.5) x confidence); length; sequence features = 0.5 x [Kyte-Doolittle TM segment (19-aa window mean >= 1.6), signal-peptide-like N-terminus (heuristic: hydrophobic 8-mer, mean >= 2.0 without D/E/K/R, starting at residues 2-20, small residues at -3/-1 of a cleavage site <= 40; open predictors only, SignalP/TMHMM are licensed), or Pfam-A domain (hmmsearch, gathering thresholds)] + 0.5 x (1 - fraction of residues disordered, metapredict >= 0.5). Not yet available, counting as missing: ORF vs non-ORF exon conservation (PhyloP100way; the bigWig is not readable here) and hits in published sORF CRISPR screens (supplementary tables not openly downloadable) |
 | M2 Translation-coupled RNA regulation | Stop codon > 50 nt upstream of the last exon junction (NMD substrate); upregulation upon NMD inhibition (missing: the ENCODE HepG2 UPF1 shRNA knock-down lowers UPF1 mRNA by only ~30% and does not raise canonical NMD targets such as GAS5, ATF4, GADD45B, TBL2, so it is not used); number of other translated ORFs (moderate/strong evidence) on the locus |
 | M3 Cis-regulation of a neighbour (RNA or DNA element) | Divergent (head-to-head, TSSs within 5 kb) or antisense (exon overlap) position next to a protein-coding gene; co-expression with the nearest protein-coding gene (TSS distance <= 100 kb, either strand; recount3 gene sums) across TCGA-LIHC and GTEx liver: Spearman rho minus the median rho of nearest protein-coding gene pairs in the same TSS-distance bin (0-5, 5-20, 20-50, 50-100 kb); nuclear enrichment (ENCODE HepG2 fractionation); enhancer-like chromatin at the dominant TSS in HepG2 (highest-TPM isoform for loci, Ensembl canonical for controls; ENCODE fold change over control, mean over TSS +- 1 kb; H3K27ac ENCFF795ONN, H3K4me1 ENCFF576YVM, H3K4me3 ENCFF284FVP): log2((H3K4me1 + 1) / (H3K4me3 + 1)) at active TSSs (H3K27ac >= 2-fold), inactive TSSs ranked lowest; low polysome association (low isoform MRL percentile) |
 | M4 Trans-acting RNA, nuclear | Nuclear enrichment; high copy number (HepG2 TPM); HepG2 eCLIP binding by nuclear RBPs (see above); no cis signature |
@@ -153,7 +154,7 @@ Controls are processed by the same code as the candidates (added as extra loci/O
 | D5 | HULC (positive), LINC01090 (negative, symbol collision) | HULC high; no LINC01089 papers credited to LINC01090 |
 | D6 | HNF1A-AS1 | liver-specific |
 | Disease score | HULC, H19 | > 90th percentile of the background |
-| Actionability | GPC3 144-152 (HLA-A*02:01 vaccine peptide) | predicted binder, tumour-specific |
+| Actionability | GPC3 144-152 (FVGEFFTDV, HLA-A*02:01 vaccine peptide) | presentation percentile <= 2; GPC3 tumour-specific |
 | M1 | MTLN (mitoregulin, former LINC00116), SPAAR (LINC00961) | top class |
 | M2 | GAS5, ZFAS1 | high (M6 also high) |
 | M3 | HNF1A-AS1 (HNF1A), LINC00261 (FOXA2) | top class |
@@ -198,5 +199,5 @@ copy-attribution confidence, disease components, disease score (+ direction, cov
 actionability score, mechanism class scores and relative shares, dominant class. Per locus (`disease.loci.tsv`):
 all locus-level statistics, percentiles and components, for loci and controls. Step tables: `qc.orfs.tsv`,
 `peptides.orfs.tsv`, `mechanism.orfs.tsv`, `coexpression.loci.tsv`, `encode.loci.tsv`, `D3.somatic.tsv`,
-`D1.chronic.tsv`, `D4.gwas.tsv`, `D4.eqtl.tsv`, `D5.literature.tsv`, `homology.orfs.tsv`, `eclip.loci.tsv`,
+`D1.chronic.tsv`, `D4.gwas.tsv`, `D4.eqtl.tsv`, `D5.literature.tsv`, `homology.orfs.tsv`, `peptide_features.orfs.tsv`, `hla.orfs.tsv`, `hla.control.tsv`, `eclip.loci.tsv`,
 `chromatin.loci.tsv`, `weights.tsv`, `quant/`, `quant_sra/`; control panel: `controls.tsv`. Location: `${WF_RUNS_DIR}Liver_lincRNA_ORFs_Claude/disease_mechanism/<run>/`.
