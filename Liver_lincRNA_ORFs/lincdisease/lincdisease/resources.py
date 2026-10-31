@@ -28,13 +28,17 @@ URLS = {
     "tcga_lihc_cn": XENA_GDC + "TCGA-LIHC.masked_cnv_DNAcopy.tsv.gz",
     "tcga_lihc_methylation": XENA_GDC + "TCGA-LIHC.methylation450.tsv.gz",
     "hm450_probemap": XENA_GDC + "HM450.hg38.manifest.gencode.v36.probeMap",
+    # TCGA PanCanAtlas ABSOLUTE purity / ploidy (Taylor et al. 2018)
+    "tcga_purity": "https://api.gdc.cancer.gov/data/4f277128-f793-4354-a13d-30cc7fe9f6b5",
     # all GTEx samples of recount3 with their tissue (project)
     "gtex_projects": "https://recount-opendata.s3.amazonaws.com/recount3/release/human/data_sources/gtex/metadata/"
                      "gtex.recount_project.MD.gz",
 }
 
 # local file names for URLs without one
-FILENAMES = {"tcga_cdr": "TCGA-CDR-SupplementalTableS1.xlsx"}
+FILENAMES = {"tcga_cdr": "TCGA-CDR-SupplementalTableS1.xlsx",
+             "tcga_purity": "TCGA_mastercalls.abs_tables_JSedit.fixed.txt",
+             "eclip_search": "files.json", "rbp_localisation": "vannostrand2020_S3.xlsx"}
 
 # columns of UCSC genomicSuperDups.txt (bin first)
 SEGDUP_COLUMNS = ["bin", "chrom", "chromStart", "chromEnd", "name", "score", "strand", "otherChrom",

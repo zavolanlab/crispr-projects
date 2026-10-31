@@ -8,7 +8,11 @@ PANEL = {
     "D1_HCC": [("HULC", "up in tumour, FDR < 0.05"), ("LINC00261", "down in tumour, FDR < 0.05")],
     "D1_chronic": [("COL1A1", "positive association with fibrosis stage")],
     "D2": [("BIRC5", "HR > 1"), ("CYTOR", "HR > 1")],
-    "D3": [("PVT1", "positive CN-expression correlation"), ("MEG3", "methylation-expression anticorrelation")],
+    # MEG3 (imprinted) is positively correlated with its promoter methylation in TCGA-LIHC, also after purity
+    # adjustment; GSTP1 was added after this was seen (of CDKN2A, RASSF1, APC, SFRP1, GSTP1 only GSTP1 is
+    # anticorrelated), so it shows that the method detects anticorrelation, not that it was pre-registered.
+    "D3": [("PVT1", "positive CN-expression correlation"), ("MEG3", "methylation-expression anticorrelation"),
+           ("GSTP1", "methylation-expression anticorrelation (chosen post hoc)")],
     "D4": [("PNPLA3", "liver-trait GWAS association"), ("TM6SF2", "liver-trait GWAS association")],
     "D5": [("HULC", "high"), ("LINC01090", "no LINC01089 papers credited")],
     "D6": [("HNF1A-AS1", "liver-specific")],

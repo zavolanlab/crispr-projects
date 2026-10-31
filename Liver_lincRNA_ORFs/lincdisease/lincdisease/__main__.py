@@ -2,15 +2,18 @@
 Command-line driver of lincdisease; one sub-command per step of LOGIC.md, each writing into --out-dir.
 
   python -m lincdisease qc       --results-dir R --candidates T --data-dir D --peptides-dir P --out-dir O
+  python -m lincdisease homology --results-dir R --candidates T --data-dir D --out-dir O [--diamond PATH]
   python -m lincdisease regions  --results-dir R --candidates T --data-dir D --out-dir O
   python -m lincdisease manifest --out-dir O [--gtex-per-tissue 10]
   python -m lincdisease quant    --out-dir O --project LIHC [--worker 0 --n-workers 4] [--scratch S]
+  python -m lincdisease chronic  --out-dir O --manifest; then quant --sample-set quant_sra; then chronic --out-dir O
   python -m lincdisease literature --results-dir R --candidates T --data-dir D --out-dir O
-  python -m lincdisease genetics --data-dir D --out-dir O
+  python -m lincdisease genetics --results-dir R --candidates T --data-dir D --out-dir O
   python -m lincdisease somatic  --results-dir R --candidates T --data-dir D --out-dir O
   python -m lincdisease encode   --results-dir R --candidates T --data-dir D --out-dir O
   python -m lincdisease mechanism --results-dir R --candidates T --data-dir D --out-dir O
   python -m lincdisease disease  --results-dir R --candidates T --data-dir D --out-dir O
+  python -m lincdisease weights  --results-dir R --candidates T --data-dir D --out-dir O
   python -m lincdisease report   --results-dir R --candidates T --data-dir D --out-dir O
 
 R: lincorfz results/ directory (background); T: candidate ORF table; D: download cache of public resources.
@@ -22,8 +25,10 @@ import pandas as pd
 
 import glob
 
-from . import (controls, disease, encode, genetics, inputs, integrate, literature, mechanism, qc, quant, report,
-               resources, somatic)
+import json
+
+from . import (chromatin, chronic, controls, disease, eclip, encode, eqtl, genetics, homology, inputs, integrate,
+               literature, mechanism, qc, quant, report, resources, somatic, weights)
 from . import scoring
 
 
@@ -51,7 +56,16 @@ def cmd_qc(args):
     if os.path.exists(feats_path):
         feats = pd.read_csv(feats_path, sep="\t", index_col=0)
         kw["quantifiable"] = orfs.set_index("orf_id")["locus_id"].map(feats["quantifiable"])
+    hpath = os.path.join(args.out_dir, "homology.orfs.tsv")
+    if os.path.exists(hpath):
+        hom = pd.read_csv(hpath, sep="\t")
+        kw["homology"] = hom.loc[hom["parent"].notna(), ["orf_id", "parent", "pident", "qcov"]]
+        kw["kaks"] = hom.set_index("orf_id")["kaks"]
     res = qc.run_qc(orfs, **kw)
+    if os.path.exists(hpath):
+        h = hom.set_index("orf_id").reindex(orfs["orf_id"])
+        res["homolog_parent_coverage"] = h["parent_coverage"].to_numpy()
+        res["homolog_kaks"] = h["kaks"].to_numpy()
     out = pd.concat([orfs[["orf_id", "orf_label", "locus_id", "locus_name", "is_candidate"]],
                      res.drop(columns="orf_id")], axis=1)
     path = os.path.join(args.out_dir, "qc.orfs.tsv")
@@ -59,6 +73,16 @@ def cmd_qc(args):
     print(f"wrote {path}: {len(out)} ORFs")
     print("tiers, all ORFs:", out["confidence_tier"].value_counts().to_dict())
     print("tiers, candidates:", out.loc[out["is_candidate"], "confidence_tier"].value_counts().to_dict())
+
+
+def cmd_homology(args):
+    orfs = inputs.load(args.results_dir, args.candidates)
+    gencode = quant.read_gtf_exons(resources.fetch("gencode_gtf", args.data_dir))
+    res = homology.run(orfs, gencode, args.data_dir, os.path.join(args.out_dir, "homology"), diamond=args.diamond,
+                       threads=args.threads)
+    path = os.path.join(args.out_dir, "homology.orfs.tsv")
+    res.to_csv(path, sep="\t")
+    print(f"wrote {path}: with homolog {res['parent'].notna().sum()}, with Ka/Ks {res['kaks'].notna().sum()}")
 
 
 def cmd_regions(args):
@@ -96,13 +120,15 @@ def cmd_manifest(args):
 
 
 def cmd_quant(args):
-    d = os.path.join(args.out_dir, "quant")
-    regions = pd.read_csv(os.path.join(d, "regions.tsv"), sep="\t")
+    regions = pd.read_csv(os.path.join(args.out_dir, "quant", "regions.tsv"), sep="\t")
+    d = os.path.join(args.out_dir, args.sample_set)
     samples = pd.read_csv(os.path.join(d, "samples.tsv"), sep="\t", low_memory=False)
     if args.project:
         samples = samples[samples["project"].isin(args.project)]
+    if args.features:
+        regions = regions[regions["feature_id"].isin(args.features)]
     samples = samples.iloc[args.worker::args.n_workers]
-    path = quant.run(samples, regions, os.path.join(d, "sums"), worker=f"{args.worker}", scratch=args.scratch)
+    path = quant.run(samples, regions, os.path.join(d, args.sums_dir), worker=f"{args.worker}", scratch=args.scratch)
     print(f"done: {path}")
 
 
@@ -113,6 +139,27 @@ def feature_names(results_dir, candidates):
     for g in controls.control_genes():
         names[f"ctrl:{g}"] = g
     return names
+
+
+def cmd_chronic(args):
+    """D1 chronic liver disease from the SRA cohorts: manifest (needs network) or statistics on the quantified sums."""
+    d = os.path.join(args.out_dir, "quant_sra")
+    if args.manifest:
+        os.makedirs(d, exist_ok=True)
+        chronic.manifest().to_csv(os.path.join(d, "samples.tsv"), sep="\t", index=False)
+        return
+    sums = read_sums(d)
+    feats = pd.read_csv(os.path.join(args.out_dir, "quant", "features.tsv"), sep="\t", index_col=0)
+    samples = pd.read_csv(os.path.join(d, "samples.tsv"), sep="\t")
+    samples = samples[samples["sample_id"].isin(sums["sample_id"])]
+    ncov = quant.normalize(sums, feats, samples)
+    res = chronic.d1_chronic(ncov, samples.set_index("sample_id")[["cohort", "fibrosis_stage", "nas", "group"]],
+                             pseudocount=args.pseudocount)
+    unq = ~feats["quantifiable"].reindex(res.index).fillna(False).astype(bool)
+    res.loc[unq, "D1_chronic"] = float("nan")
+    path = os.path.join(args.out_dir, "D1.chronic.tsv")
+    res.to_csv(path, sep="\t", index_label="feature_id")
+    print(f"wrote {path}; tested {res['D1_chronic'].notna().sum()}, FDR < 0.05: {(res['chronic_fdr'] < 0.05).sum()}")
 
 
 def cmd_literature(args):
@@ -132,31 +179,46 @@ def cmd_genetics(args):
     res.to_csv(path, sep="\t", index_label="feature_id")
     print(f"wrote {path}; {len(assoc)} liver-trait associations; features with a hit: {(res['gwas_n'] > 0).sum()}")
 
+    # GTEx v8 liver eQTLs (reported, not scored); the two Liver files are extracted from the GTEx tar beforehand:
+    # curl -s <eqtl.GTEX_TAR> | tar -x -C <data_dir>/gtex_eqtl --wildcards '*Liver.v8.egenes*' '*Liver.v8.signif*'
+    g = os.path.join(args.data_dir, "gtex_eqtl")
+    egenes = pd.read_csv(os.path.join(g, eqtl.EGENES), sep="\t")
+    pairs = pd.read_csv(os.path.join(g, eqtl.PAIRS), sep="\t", usecols=["variant_id", "gene_id", "pval_nominal", "slope"])
+    loci = inputs.loci(inputs.load(args.results_dir, args.candidates))
+    res = eqtl.per_feature(eqtl.feature_genes(loci, controls.control_genes(), egenes), egenes, pairs, assoc)
+    res.to_csv(os.path.join(args.out_dir, "D4.eqtl.tsv"), sep="\t", index_label="feature_id")
+    print(f"eqtl: tested {len(res)}, eGenes {res['eqtl_egene'].sum()}, GWAS-linked {(res['eqtl_gwas_mlog10p'] > 0).sum()}")
+
 
 def feature_transcripts(results_dir, data_dir):
-    """Isoforms of every locus and control as feature_id/chrom/start0/end1/strand."""
+    """Isoforms of every locus and control as feature_id/transcript_id/chrom/start0/end1/strand, with TPM_max
+    (loci) and the Ensembl canonical flag (controls)."""
     tx = pd.read_csv(os.path.join(results_dir, "lincRNAs", "lincRNA_transcripts.tsv"), sep="\t")
-    tx = tx.rename(columns={"gene_id": "feature_id"})[["feature_id", "chrom", "start0", "end1", "strand"]]
-    gencode = quant.read_gtf_exons(resources.fetch("gencode_gtf", data_dir))
+    tx = tx.rename(columns={"gene_id": "feature_id"})[["feature_id", "transcript_id", "chrom", "start0", "end1",
+                                                        "strand", "TPM_max"]]
+    gtf = resources.fetch("gencode_gtf", data_dir)
+    gencode = quant.read_gtf_exons(gtf)
     ctrl = gencode[gencode["gene_name"].isin(controls.control_genes())]
     ctrl = ctrl.groupby("transcript_id").agg(feature_id=("gene_name", "first"), chrom=("chrom", "first"),
                                              start0=("start0", "min"), end1=("end1", "max"),
-                                             strand=("strand", "first"))
+                                             strand=("strand", "first")).reset_index()
     ctrl["feature_id"] = "ctrl:" + ctrl["feature_id"]
-    return pd.concat([tx, ctrl], ignore_index=True)
+    ctrl["canonical"] = ctrl["transcript_id"].isin(somatic.canonical_transcripts(gtf))
+    return pd.concat([tx.assign(canonical=False), ctrl], ignore_index=True)
 
 
 def cmd_somatic(args):
     ncov, expr, samples, feats = load_expression(args.out_dir, args.pseudocount)
     segments = pd.read_csv(resources.fetch("tcga_lihc_cn", args.data_dir), sep="\t")
     cn = somatic.cn_at(feats[["chrom", "start0", "end1"]], segments)
-    windows = somatic.tss_windows(feature_transcripts(args.results_dir, args.data_dir))
+    windows = somatic.tss_windows(somatic.dominant_isoforms(feature_transcripts(args.results_dir, args.data_dir)))
     probes = somatic.promoter_probes(windows, somatic.read_probemap(resources.fetch("hm450_probemap", args.data_dir)))
     beta = somatic.read_methylation(resources.fetch("tcga_lihc_methylation", args.data_dir),
                                     sorted({p for v in probes.values() for p in v}))
     pb = somatic.promoter_beta(beta, probes)
     pb["n_probes"] = pd.Series({f: len(p) for f, p in probes.items()})
-    res = somatic.d3(expr, samples, cn, pb.drop(columns="n_probes"))
+    purity = somatic.read_purity(resources.fetch("tcga_purity", args.data_dir))
+    res = somatic.d3(expr, samples, cn, pb.drop(columns="n_probes"), purity=purity)
     res["meth_n_probes"] = pb["n_probes"].reindex(res.index).fillna(0).astype(int)
     unq = ~feats["quantifiable"].reindex(res.index).fillna(False).astype(bool)
     res.loc[unq, ["d3_cn", "d3_meth", "D3"]] = float("nan")
@@ -170,13 +232,36 @@ def cmd_encode(args):
     for files in encode.BIGWIGS.values():
         for acc in (a for rep in files for a in rep):
             resources.fetch(acc, d, url=encode.ENCODE_DOWNLOAD.format(acc))
-    regions = pd.read_csv(os.path.join(args.out_dir, "quant", "regions.tsv"), sep="\t")
-    strands = feature_transcripts(args.results_dir, args.data_dir).groupby("feature_id")["strand"].first()
+    loci = inputs.loci(inputs.load(args.results_dir, args.candidates))
+    gencode = quant.read_gtf_exons(resources.fetch("gencode_gtf", args.data_dir))
+    # stranded data: only same-strand GENCODE exons compete for reads (quant/regions.tsv is for unstranded data)
+    regions, strands = eclip.stranded_regions(
+        quant.read_gtf_exons(os.path.join(args.results_dir, "lincRNAs", "lincRNA_transcripts.gtf")), gencode, loci,
+        controls.control_genes())
     res = encode.features(regions, strands, d)
     path = os.path.join(args.out_dir, "encode.loci.tsv")
     res.to_csv(path, sep="\t", index_label="feature_id")
     print(f"wrote {path}; nuclear ratio for {res['nuclear_log2ratio'].notna().sum()}, "
           f"UPF1 KD for {res['upf1_kd_log2fc'].notna().sum()} features")
+
+    ed = os.path.join(d, "eclip")
+    files = eclip.idr_files(json.load(open(resources.fetch("eclip_search", ed, url=eclip.ENCODE_SEARCH))))
+    for acc in files["accession"]:
+        resources.fetch(acc, ed, url=eclip.ENCODE_BED.format(acc))
+    groups = eclip.rbp_groups(resources.fetch("rbp_localisation", ed, url=eclip.RBP_ANNOTATION))
+    res = eclip.features(regions, strands, eclip.load_peak_sets(files, ed), groups)
+    res.to_csv(os.path.join(args.out_dir, "eclip.loci.tsv"), sep="\t", index_label="feature_id")
+    print(f"eclip: bound by >= 1 RBP: {(res['eclip_n_rbps'] > 0).sum()} of {len(res)} features")
+
+    cd = os.path.join(d, "chromatin")
+    for _, acc in chromatin.BIGWIGS.values():
+        resources.fetch(acc, cd, url=chromatin.ENCODE_DOWNLOAD.format(acc))
+    tx = pd.read_csv(os.path.join(args.results_dir, "lincRNAs", "lincRNA_transcripts.tsv"), sep="\t")
+    tss = chromatin.dominant_tss(tx, resources.fetch("gencode_gtf", args.data_dir), controls.control_genes())
+    tss = tss[tss.index.isin(loci.index) | tss.index.str.startswith("ctrl:")]
+    res = chromatin.features(tss, cd)
+    res.to_csv(os.path.join(args.out_dir, "chromatin.loci.tsv"), sep="\t", index_label="feature_id")
+    print(f"chromatin: active TSS {(res['chrom_active'] > 0).sum()}, enhancer-like {(res['enhancer_score'] > 0).sum()}")
 
 
 COEXPRESSION_PROJECTS = (("tcga", "LIHC"), ("gtex", "LIVER"))
@@ -215,7 +300,8 @@ def cmd_mechanism(args):
                                mechanism.small_rna_hosts(loci_tx, mechanism.small_rna_genes(
                                    gencode, resources.read_wgrna(args.data_dir))),
                                coexpr["coexpr_excess"],
-                               pd.read_csv(os.path.join(args.out_dir, "encode.loci.tsv"), sep="\t", index_col=0))
+                               *(pd.read_csv(os.path.join(args.out_dir, f"{t}.loci.tsv"), sep="\t", index_col=0)
+                                 for t in ("encode", "eclip", "chromatin")))
     res = mechanism.class_table(feats, pd.Series(True, index=orfs.index))
     out = pd.concat([orfs[["orf_id", "orf_label", "locus_id", "locus_name", "is_candidate"]],
                      feats.add_prefix("raw_"), res], axis=1)
@@ -225,10 +311,23 @@ def cmd_mechanism(args):
     print("dominant class, candidates:", out.loc[out["is_candidate"], "dominant_class"].value_counts().to_dict())
 
 
+def read_sums(quant_dir):
+    """Coverage sums of quant/sums/ joined with those of features quantified later (quant/sums_*/), by sample."""
+    parts = []
+    for sd in sorted(glob.glob(os.path.join(quant_dir, "sums*"))):
+        files = sorted(glob.glob(os.path.join(sd, "sums.*.tsv")))
+        if files:
+            parts.append(pd.concat([pd.read_csv(f, sep="\t") for f in files]).drop_duplicates("sample_id")
+                         .set_index("sample_id"))
+    sums = parts[0]
+    for extra in parts[1:]:
+        sums = sums.join(extra[extra.columns.difference(sums.columns)], how="left")
+    return sums.reset_index()
+
+
 def load_expression(out_dir, pseudocount):
     d = os.path.join(out_dir, "quant")
-    sums = pd.concat([pd.read_csv(f, sep="\t") for f in sorted(glob.glob(os.path.join(d, "sums", "sums.*.tsv")))])
-    sums = sums.drop_duplicates("sample_id")
+    sums = read_sums(d)
     feats = pd.read_csv(os.path.join(d, "features.tsv"), sep="\t", index_col=0)
     samples = pd.read_csv(os.path.join(d, "samples.tsv"), sep="\t", low_memory=False)
     samples = samples[samples["sample_id"].isin(sums["sample_id"])]
@@ -250,10 +349,13 @@ def cmd_disease(args):
     d4 = pd.read_csv(os.path.join(args.out_dir, "D4.gwas.tsv"), sep="\t", index_col=0)
     d5 = pd.read_csv(os.path.join(args.out_dir, "D5.literature.tsv"), sep="\t", index_col=0)
     d3 = pd.read_csv(os.path.join(args.out_dir, "D3.somatic.tsv"), sep="\t", index_col=0)
+    d4q = pd.read_csv(os.path.join(args.out_dir, "D4.eqtl.tsv"), sep="\t", index_col=0)
+    d4q["D4_eqtl_supported"] = d4q["eqtl_gwas_mlog10p"] > 0
 
     stats = pd.DataFrame(index=feats.index)
     stats["D1_HCC"] = d1["D1_HCC"]
-    stats["D1_chronic"] = float("nan")           # disease cohorts not yet quantified
+    d1c = pd.read_csv(os.path.join(args.out_dir, "D1.chronic.tsv"), sep="\t", index_col=0)
+    stats["D1_chronic"] = d1c["D1_chronic"]
     stats["D2"] = d2["D2"]
     stats["D3"] = d3["D3"]
     stats["D4"] = d4["D4"]
@@ -261,14 +363,15 @@ def cmd_disease(args):
     stats = stats.join(d6)
     # loci that cannot be measured in unstranded public RNA-seq have no expression-based components
     unq = ~feats["quantifiable"].reindex(stats.index).fillna(False).astype(bool)
-    stats.loc[unq, ["D1_HCC", "D2", "gtex_liver_median", "liver_specificity"]] = float("nan")
+    stats.loc[unq, ["D1_HCC", "D1_chronic", "D2", "gtex_liver_median", "liver_specificity"]] = float("nan")
     is_bg = pd.Series(stats.index.isin(loci.index), index=stats.index)
     score = integrate.disease_score(stats, is_bg)
 
     tum_spec = integrate.tumour_specificity(expr, samples)
     tum_spec[unq.reindex(tum_spec.index).fillna(False)] = float("nan")
-    out = pd.concat([stats.add_prefix("stat_"), score, d1.drop(columns="D1_HCC"), d2.drop(columns="D2"),
-                     d3.drop(columns="D3"), d4.drop(columns="D4"), d5.drop(columns=["D5", "symbol"]),
+    out = pd.concat([stats.add_prefix("stat_"), score, d1.drop(columns="D1_HCC"), d1c.drop(columns="D1_chronic"),
+                     d2.drop(columns="D2"),
+                     d3.drop(columns="D3"), d4.drop(columns="D4"), d4q, d5.drop(columns=["D5", "symbol"]),
                      tum_spec.rename("tumour_specificity")], axis=1)
     out.insert(0, "symbol", loci["locus_name"].reindex(out.index).fillna(out.index.to_series().str.replace("ctrl:", "")))
     out.insert(1, "is_control", out.index.str.startswith("ctrl:"))
@@ -277,6 +380,19 @@ def cmd_disease(args):
     path = os.path.join(args.out_dir, "disease.loci.tsv")
     out.to_csv(path, sep="\t", index_label="feature_id")
     print(f"wrote {path}")
+
+
+def cmd_weights(args):
+    path = os.path.join(args.out_dir, "disease.loci.tsv")
+    dis = pd.read_csv(path, sep="\t", index_col=0)
+    comp = dis[[f"comp_{c}" for c in weights.COMPONENTS]].rename(columns=lambda c: c[5:])
+    y = weights.labels(dis[["symbol", "n_liver", "n_retracted"]], ~dis["is_control"], args.min_papers)
+    w, summary = weights.fit(comp, y)
+    dis["disease_score_fitted"] = weights.fitted_score(comp, w)
+    dis.to_csv(path, sep="\t", index_label="feature_id")
+    out = pd.concat([w.rename("weight"), pd.Series(summary, name="value")])
+    out.to_csv(os.path.join(args.out_dir, "weights.tsv"), sep="\t", header=["value"], index_label="key")
+    print(out.to_string())
 
 
 def cmd_report(args):
@@ -310,6 +426,12 @@ def main():
                    help="directory with proteomics/ and peptidomics/ results of the lincorfz notebook")
     q.set_defaults(func=cmd_qc)
 
+    hm = sub.add_parser("homology", help="Step 1: DIAMOND homology to annotated proteins, Ka/Ks vs the parent")
+    _common(hm)
+    hm.add_argument("--diamond", default="diamond")
+    hm.add_argument("--threads", type=int, default=4)
+    hm.set_defaults(func=cmd_homology)
+
     r = sub.add_parser("regions", help="Step 2: quantifiable exonic regions of loci and controls")
     _common(r)
     r.add_argument("--min-quant-bases", type=int, default=100)
@@ -326,15 +448,25 @@ def main():
     s.add_argument("--worker", type=int, default=0)
     s.add_argument("--n-workers", type=int, default=1)
     s.add_argument("--scratch", help="directory for the temporary bigWig downloads")
+    s.add_argument("--sample-set", default="quant",
+                   help="subdirectory of --out-dir with samples.tsv (quant: TCGA/GTEx; quant_sra: chronic cohorts)")
+    s.add_argument("--features", nargs="*", help="quantify only these features (added later, e.g. a new control)")
+    s.add_argument("--sums-dir", default="sums", help="subdirectory of quant/ for the sums (sums_<name> for added "
+                                                       "features; joined to quant/sums/ by sample)")
     s.set_defaults(func=cmd_quant)
+
+    ch = sub.add_parser("chronic", help="Step 3, D1 chronic liver disease (SRA cohorts in quant_sra/)")
+    ch.add_argument("--manifest", action="store_true", help="write quant_sra/samples.tsv (needs network)")
+    ch.add_argument("--pseudocount", type=float, default=0.05)
+    ch.set_defaults(func=cmd_chronic)
 
     lt = sub.add_parser("literature", help="Step 3, D5: Europe PMC counts")
     _common(lt)
     lt.add_argument("--threads", type=int, default=4)
     lt.set_defaults(func=cmd_literature)
 
-    gw = sub.add_parser("genetics", help="Step 3, D4: GWAS Catalog liver traits near each feature")
-    gw.add_argument("--data-dir", required=True)
+    gw = sub.add_parser("genetics", help="Step 3, D4: GWAS Catalog liver traits near each feature, GTEx liver eQTLs")
+    _common(gw)
     gw.add_argument("--flank", type=int, default=50_000)
     gw.set_defaults(func=cmd_genetics)
 
@@ -343,7 +475,7 @@ def main():
     so.add_argument("--pseudocount", type=float, default=0.05, help="added to ncov before log2")
     so.set_defaults(func=cmd_somatic)
 
-    en = sub.add_parser("encode", help="Step 4: ENCODE HepG2 nuclear enrichment and UPF1 knock-down response")
+    en = sub.add_parser("encode", help="Step 4: ENCODE HepG2 fractionation, UPF1 knock-down, eCLIP and chromatin")
     _common(en)
     en.set_defaults(func=cmd_encode)
 
@@ -356,6 +488,12 @@ def main():
     _common(ds)
     ds.add_argument("--pseudocount", type=float, default=0.05, help="added to ncov before log2")
     ds.set_defaults(func=cmd_disease)
+
+    wt = sub.add_parser("weights", help="Optional: fitted disease-score weights (alternative score)")
+    _common(wt)
+    wt.add_argument("--min-papers", type=int, default=weights.MIN_PAPERS,
+                    help="liver papers (non-retracted) for an established liver-disease lncRNA")
+    wt.set_defaults(func=cmd_weights)
 
     rp = sub.add_parser("report", help="Outputs: per-ORF table, candidates, control panel")
     _common(rp)

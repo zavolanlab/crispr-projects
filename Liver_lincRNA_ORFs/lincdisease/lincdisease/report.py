@@ -33,6 +33,7 @@ def orf_table(orfs, qc_table, disease_loci, mech, act):
                     "log2FC_paired", "fdr_paired", "auc_vs_gtex", "fdr_vs_gtex", "HR_OS", "fdr_OS", "HR_PFI",
                     "fdr_PFI", "gwas_top_trait", "gwas_top_snp", "gwas_disease_max", "gwas_enzyme_max",
                     "n_liver", "n_review", "n_retracted", "tumour_specificity"]
+    keep_disease += [c for c in ("disease_score_fitted",) if c in disease_loci]
     dl = disease_loci[keep_disease].reindex(orfs["locus_id"])
     dl.index = orfs.index
     mcols = [c for c in mech.columns if c.endswith(("_score", "_share", "_coverage")) or c == "dominant_class"]
@@ -53,14 +54,16 @@ def control_report(disease_loci, mech_by_locus_name):
     """Check the control expectations of LOGIC.md Step 5 that the current inputs can evaluate."""
     d = disease_loci
     g = lambda gene, col: d.loc[f"ctrl:{gene}", col] if f"ctrl:{gene}" in d.index else np.nan
-    bg90 = d.loc[~d["is_control"], "disease_score"].quantile(0.9)
     rows = [
         _row("HULC", "D1_HCC", f"log2FC {g('HULC', 'log2FC_paired'):.2f}, FDR {g('HULC', 'fdr_paired'):.2g}",
              "up in tumour, FDR < 0.05", g("HULC", "log2FC_paired") > 0 and g("HULC", "fdr_paired") < 0.05),
         _row("LINC00261", "D1_HCC",
              f"log2FC {g('LINC00261', 'log2FC_paired'):.2f}, FDR {g('LINC00261', 'fdr_paired'):.2g}",
              "down in tumour, FDR < 0.05", g("LINC00261", "log2FC_paired") < 0 and g("LINC00261", "fdr_paired") < 0.05),
-        _row("COL1A1", "D1_chronic", "not evaluated", "positive association with fibrosis stage", None),
+        _row("COL1A1", "D1_chronic", f"rho_fibrosis {g('COL1A1', 'hoang_r'):.2f}, p {g('COL1A1', 'hoang_p'):.2g}, "
+                                     f"D1_chronic {g('COL1A1', 'stat_D1_chronic'):.2f}",
+             "positive association with fibrosis stage (rho > 0, p < 0.05)",
+             g("COL1A1", "hoang_r") > 0 and g("COL1A1", "hoang_p") < 0.05),
     ]
     for gene in ("BIRC5", "CYTOR"):
         rows.append(_row(gene, "D2", f"HR_OS {g(gene, 'HR_OS'):.2f}, FDR {g(gene, 'fdr_OS'):.2g}", "HR > 1",
@@ -70,9 +73,11 @@ def control_report(disease_loci, mech_by_locus_name):
                            f"{g('PVT1', 'cn_gain_freq'):.2f}, D3 {g('PVT1', 'stat_D3'):.2f}",
              "rho_CN > 0 (FDR < 0.05), D3 > 0",
              g("PVT1", "cn_rho") > 0 and g("PVT1", "cn_fdr") < 0.05 and g("PVT1", "stat_D3") > 0),
-        _row("MEG3", "D3", f"rho_meth {g('MEG3', 'meth_rho'):.2f}, FDR {g('MEG3', 'meth_fdr'):.2g}",
-             "rho_meth < 0 (FDR < 0.05)", g("MEG3", "meth_rho") < 0 and g("MEG3", "meth_fdr") < 0.05),
     ]
+    for gene, note in (("MEG3", ""), ("GSTP1", "; chosen post hoc")):
+        rows.append(_row(gene, "D3", f"rho_meth {g(gene, 'meth_rho'):.2f} (raw {g(gene, 'meth_rho_raw'):.2f}), "
+                                     f"FDR {g(gene, 'meth_fdr'):.2g}",
+                         f"rho_meth < 0 (FDR < 0.05){note}", g(gene, "meth_rho") < 0 and g(gene, "meth_fdr") < 0.05))
     for gene in ("PNPLA3", "TM6SF2"):
         rows.append(_row(gene, "D4", f"max -log10 p {g(gene, 'stat_D4'):.0f} ({g(gene, 'gwas_top_snp')})",
                          "liver-trait GWAS association", g(gene, "stat_D4") >= -np.log10(5e-8)))
@@ -83,9 +88,13 @@ def control_report(disease_loci, mech_by_locus_name):
         _row("HNF1A-AS1", "D6", f"D6 {g('HNF1A-AS1', 'comp_D6'):.2f}", "liver-specific (D6 >= 0.75)",
              g("HNF1A-AS1", "comp_D6") >= 0.75),
     ]
-    for gene in ("HULC", "H19"):
-        rows.append(_row(gene, "disease_score", f"{g(gene, 'disease_score'):.3f} (90th pct {bg90:.3f})",
-                         "> 90th percentile of the background", g(gene, "disease_score") > bg90))
+    for col in ("disease_score", "disease_score_fitted"):
+        if col not in d:
+            continue
+        bg90 = d.loc[~d["is_control"], col].quantile(0.9)
+        for gene in ("HULC", "H19"):
+            rows.append(_row(gene, col, f"{g(gene, col):.3f} (90th pct {bg90:.3f})",
+                             "> 90th percentile of the background", g(gene, col) > bg90))
     rows.append(_row("GPC3", "actionability", f"tumour specificity {g('GPC3', 'tumour_specificity'):.2f}",
                      "tumour-specific (> 0); HLA binding not evaluated", g("GPC3", "tumour_specificity") > 0))
 

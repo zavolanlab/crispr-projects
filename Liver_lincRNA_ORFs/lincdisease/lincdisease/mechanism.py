@@ -210,10 +210,11 @@ def small_rna_hosts(loci_tx, small_rnas):
 
 # ---------------------------------------------------------------- features and scores
 
-def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=None, encode=None):
+def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=None, encode=None, eclip=None,
+             chromatin=None):
     """
     Raw feature values per ORF (index of `orfs`). `coexpr`: locus -> co-expression excess (coexpression);
-    `encode`: locus table of encode.features.
+    `encode`, `eclip`, `chromatin`: locus tables of encode.features, eclip.features, chromatin.features.
     """
     f = pd.DataFrame(index=orfs.index)
     num = lambda c: pd.to_numeric(orfs[c], errors="coerce")
@@ -242,6 +243,11 @@ def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=No
     f["m5_ribosome_no_dominant_orf"] = num("MRL_pct_vs_mRNA") * (1.0 - max_share)
     f["m5_cytoplasmic"] = -nuclear
     f["m6_small_rna_host"] = orfs["locus_id"].map(small_rna).to_numpy()
+    locus = lambda table, col: (orfs["locus_id"].map(table[col]).astype(float).to_numpy() if table is not None
+                                else np.nan)
+    f["m3_enhancer_chromatin"] = locus(chromatin, "enhancer_score")
+    f["m4_eclip_nuclear"] = locus(eclip, "eclip_nuclear_enrichment")
+    f["m5_eclip_cytoplasmic"] = locus(eclip, "eclip_cytoplasmic_enrichment")
     return f
 
 

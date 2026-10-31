@@ -37,3 +37,23 @@ def test_d3_sign():
     res = somatic.d3(expr, samples, cn, b)
     assert res.loc["onc", "D3"] > 0.3 and res.loc["onc", "D3_source"] == "cn"
     assert res.loc["sup", "D3"] < 0 and res.loc["sup", "D3_source"] == "meth"
+
+
+def test_partial_spearman_removes_confounder():
+    rng = np.random.default_rng(1)
+    z = rng.uniform(0, 1, 300)                           # purity drives both
+    x, y = z + rng.normal(0, 0.1, 300), z + rng.normal(0, 0.1, 300)
+    assert stats_rho(x, y) > 0.8
+    r, p = somatic.partial_spearman(x, y, z)
+    assert abs(r) < 0.15 and p > 0.01
+
+
+def stats_rho(x, y):
+    from scipy import stats
+    return stats.spearmanr(x, y)[0]
+
+
+def test_dominant_isoforms():
+    t = pd.DataFrame({"feature_id": ["a", "a", "ctrl:B", "ctrl:B"], "transcript_id": ["a1", "a2", "b1", "b2"],
+                      "TPM_max": [1.0, 5.0, np.nan, np.nan], "canonical": [False, False, False, True]})
+    assert list(somatic.dominant_isoforms(t)["transcript_id"]) == ["a2", "b2"]
