@@ -161,6 +161,22 @@ def bigwig_url(source, project, external_id):
             f"{source}.base_sums.{project}_{external_id}.ALL.bw")
 
 
+def gene_sums_url(source, project, annotation="G026"):
+    return f"{RECOUNT3}{source}/gene_sums/{project[-2:]}/{project}/{source}.gene_sums.{project}.{annotation}.gz"
+
+
+def read_gene_sums(path, source, samples):
+    """recount3 gene sums (GENCODE v26) of the given samples, divided by their AUC; index = unversioned gene id,
+    columns = sample_id."""
+    g = pd.read_csv(path, sep="\t", comment="#", index_col=0)
+    g.columns = source + ":" + g.columns.astype(str)
+    auc = samples.set_index("sample_id")["auc"]
+    g = g[[c for c in g.columns if c in auc.index]]
+    g = g / auc[g.columns] * 1e9
+    g.index = g.index.str.split(".").str[0]
+    return g[~g.index.duplicated()]
+
+
 def manifest(source, project, keep_columns=()):
     """
     Samples of a recount3 project (source tcga / gtex / sra) with bigWig URL, total coverage (AUC) and the

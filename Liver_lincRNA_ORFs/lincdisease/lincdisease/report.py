@@ -65,8 +65,14 @@ def control_report(disease_loci, mech_by_locus_name):
     for gene in ("BIRC5", "CYTOR"):
         rows.append(_row(gene, "D2", f"HR_OS {g(gene, 'HR_OS'):.2f}, FDR {g(gene, 'fdr_OS'):.2g}", "HR > 1",
                          g(gene, "HR_OS") > 1))
-    rows += [_row("PVT1", "D3", "not evaluated", "CN-expression correlation", None),
-             _row("MEG3", "D3", "not evaluated", "methylation-expression anticorrelation", None)]
+    rows += [
+        _row("PVT1", "D3", f"rho_CN {g('PVT1', 'cn_rho'):.2f}, FDR {g('PVT1', 'cn_fdr'):.2g}, gain "
+                           f"{g('PVT1', 'cn_gain_freq'):.2f}, D3 {g('PVT1', 'stat_D3'):.2f}",
+             "rho_CN > 0 (FDR < 0.05), D3 > 0",
+             g("PVT1", "cn_rho") > 0 and g("PVT1", "cn_fdr") < 0.05 and g("PVT1", "stat_D3") > 0),
+        _row("MEG3", "D3", f"rho_meth {g('MEG3', 'meth_rho'):.2f}, FDR {g('MEG3', 'meth_fdr'):.2g}",
+             "rho_meth < 0 (FDR < 0.05)", g("MEG3", "meth_rho") < 0 and g("MEG3", "meth_fdr") < 0.05),
+    ]
     for gene in ("PNPLA3", "TM6SF2"):
         rows.append(_row(gene, "D4", f"max -log10 p {g(gene, 'stat_D4'):.0f} ({g(gene, 'gwas_top_snp')})",
                          "liver-trait GWAS association", g(gene, "stat_D4") >= -np.log10(5e-8)))

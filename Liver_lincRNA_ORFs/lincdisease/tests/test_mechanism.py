@@ -60,3 +60,19 @@ def test_small_rna_hosts_dedupes_sources():
                        "strand": ["-", "-", "+"]})
     sr = mechanism.small_rna_genes(gencode, wg)
     assert mechanism.small_rna_hosts(loci, sr).loc["host"] == 2.0
+
+
+def test_nearest_coding_and_coexpression():
+    genes = pd.DataFrame({"chrom": "chr1", "tss": [1000, 50_000, 51_000, 400_000]}, index=["g1", "g2", "g3", "g4"])
+    query = pd.DataFrame({"chrom": ["chr1", "chr1"], "tss": [3000, 900_000]}, index=["L1", "L2"])
+    nb = mechanism.nearest_coding(query, genes)
+    assert nb.loc["L1", "neighbour"] == "g1" and nb.loc["L1", "distance"] == 2000
+    assert pd.isna(nb.loc["L2", "neighbour"])
+    null = mechanism.nearest_coding(genes, genes, exclude_self=True)
+    assert null.loc["g2", "neighbour"] == "g3"
+
+    rng = np.random.default_rng(1)
+    g = pd.DataFrame(rng.normal(size=(4, 50)), index=["g1", "g2", "g3", "g4"])
+    loc = pd.DataFrame([g.loc["g1"] + rng.normal(0, 0.1, 50)], index=["L1"])
+    res = mechanism.coexpression(loc, g, nb.loc[["L1"]], null)
+    assert res.loc["L1", "coexpr_rho"] > 0.9 and res.loc["L1", "neighbour"] == "g1"

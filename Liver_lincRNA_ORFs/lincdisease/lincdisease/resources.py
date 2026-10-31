@@ -10,6 +10,7 @@ import urllib.request
 import pandas as pd
 
 GIAB = "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/genome-stratifications/v3.3/GRCh38@all/OtherDifficult/"
+XENA_GDC = "https://gdc-hub.s3.us-east-1.amazonaws.com/download/"
 URLS = {
     "segdups": "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/genomicSuperDups.txt.gz",
     # GRCh38 regions falsely duplicated relative to T2T-CHM13 (Aganezov et al. 2022), both copies
@@ -23,6 +24,10 @@ URLS = {
                     "gwas-catalog-associations_ontology-annotated-full.zip",
     # TCGA Pan-Cancer Clinical Data Resource (Liu et al. 2018), survival endpoints
     "tcga_cdr": "https://api.gdc.cancer.gov/data/1b5f413e-a8d1-4d10-92eb-7c4ae739ed81",
+    # TCGA-LIHC masked copy-number segments and 450K methylation (GDC, GRCh38) via the UCSC Xena GDC hub
+    "tcga_lihc_cn": XENA_GDC + "TCGA-LIHC.masked_cnv_DNAcopy.tsv.gz",
+    "tcga_lihc_methylation": XENA_GDC + "TCGA-LIHC.methylation450.tsv.gz",
+    "hm450_probemap": XENA_GDC + "HM450.hg38.manifest.gencode.v36.probeMap",
     # all GTEx samples of recount3 with their tissue (project)
     "gtex_projects": "https://recount-opendata.s3.amazonaws.com/recount3/release/human/data_sources/gtex/metadata/"
                      "gtex.recount_project.MD.gz",

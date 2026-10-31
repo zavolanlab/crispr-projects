@@ -8,13 +8,15 @@ Features computed here (higher = more support for the class; '-' marks features 
       PhyloCSF weighted by copy-attribution confidence, ORF length
   M2  NMD substrate (stop codon > 50 nt upstream of the last exon junction), number of other translated ORFs
       (evidence moderate/strong) on the locus
-  M3  divergent / antisense position next to a protein-coding gene, low polysome association (-MRL percentile)
+  M3  divergent / antisense position next to a protein-coding gene, low polysome association (-MRL percentile),
+      co-expression with the nearest protein-coding gene (TSS distance <= 100 kb) across TCGA-LIHC and GTEx
+      liver: Spearman rho minus the median rho of protein-coding gene pairs in the same TSS-distance bin
   M4  copy number (log2 TPM HepG2), no cis position (1 - M3 position)
   M5  ribosome association without one dominant ORF (MRL percentile x (1 - largest ORF share of the locus))
   M6  snoRNA / scaRNA / miRNA genes (GENCODE + UCSC wgRna) inside the locus span on the same strand
-Features from ENCODE HepG2 data (fractionation, eCLIP, UPF1 knock-down, chromatin), ORF vs non-ORF exon
-conservation, sequence features (TM, signal peptide, Pfam, disorder) and CRISPR screens enter as missing
-until their inputs are added; scoring.composite shrinks them to 0.5.
+ENCODE HepG2 features (encode.py): nuclear enrichment (M3, M4) and its negative (M5). UPF1 knock-down (M2),
+eCLIP, chromatin at the TSS, ORF vs non-ORF exon conservation, sequence features (TM, signal peptide, Pfam,
+disorder) and CRISPR screens enter as missing until their inputs are added; scoring.composite shrinks them to 0.5.
 """
 import numpy as np
 import pandas as pd
@@ -32,6 +34,8 @@ CLASSES = {
 }
 DOMINANCE_MARGIN = 0.05
 DIVERGENT_DISTANCE = 5000
+NEIGHBOUR_MAX_DISTANCE = 100_000
+DISTANCE_BINS = (0, 5_000, 20_000, 50_000, 100_000)
 SMALL_RNA_TYPES = {"snoRNA", "scaRNA", "miRNA"}
 
 
@@ -88,6 +92,14 @@ def stop_to_last_junction(orfs, tx_exons):
     return out
 
 
+def gene_spans(df, id_col):
+    """Span, strand and TSS per `id_col` of an exon/transcript table."""
+    g = df.groupby(id_col).agg(chrom=("chrom", "first"), start0=("start0", "min"), end1=("end1", "max"),
+                               strand=("strand", "first"))
+    g["tss"] = np.where(g["strand"] == "+", g["start0"], g["end1"])
+    return g
+
+
 def neighbour_position(loci_tx, gencode_exons, distance=DIVERGENT_DISTANCE):
     """
     Per locus: 1 if it overlaps exons of a protein-coding gene on the opposite strand (antisense) or its TSS lies
@@ -95,12 +107,8 @@ def neighbour_position(loci_tx, gencode_exons, distance=DIVERGENT_DISTANCE):
     `loci_tx`: lincRNA isoform table (gene_id, chrom, start0, end1, strand).
     """
     pc = gencode_exons[gencode_exons["gene_type"] == "protein_coding"]
-    genes = pc.groupby("gene_id").agg(chrom=("chrom", "first"), start0=("start0", "min"), end1=("end1", "max"),
-                                      strand=("strand", "first"))
-    genes["tss"] = np.where(genes["strand"] == "+", genes["start0"], genes["end1"])
-    span = loci_tx.groupby("gene_id").agg(chrom=("chrom", "first"), start0=("start0", "min"),
-                                          end1=("end1", "max"), strand=("strand", "first"))
-    span["tss"] = np.where(span["strand"] == "+", span["start0"], span["end1"])
+    genes = gene_spans(pc, "gene_id")
+    span = gene_spans(loci_tx, "gene_id")
     pc_by = {(c, s): g for (c, s), g in pc.groupby(["chrom", "strand"])}
     genes_by = {(c, s): g for (c, s), g in genes.groupby(["chrom", "strand"])}
     out = pd.Series(0.0, index=span.index)
@@ -120,6 +128,61 @@ def neighbour_position(loci_tx, gencode_exons, distance=DIVERGENT_DISTANCE):
     return out
 
 
+def nearest_coding(query, genes, max_distance=NEIGHBOUR_MAX_DISTANCE, exclude_self=False):
+    """
+    For each row of `query` (index id; chrom, tss) the protein-coding gene of `genes` (same layout) with the
+    nearest TSS, on either strand, within `max_distance`: columns neighbour (unversioned gene id), distance.
+    """
+    out = pd.DataFrame({"neighbour": pd.Series(np.nan, index=query.index, dtype=object),
+                        "distance": np.nan})
+    by = {c: g.sort_values("tss") for c, g in genes.groupby("chrom")}
+    for chrom, q in query.groupby("chrom"):
+        g = by.get(chrom)
+        if g is None:
+            continue
+        pos, ids = g["tss"].to_numpy(), g.index.to_numpy()
+        for qid, t in q["tss"].items():
+            k = np.searchsorted(pos, t)
+            cand = [j for j in (k - 2, k - 1, k, k + 1) if 0 <= j < len(pos) and not (exclude_self and ids[j] == qid)]
+            j = min(cand, key=lambda j: abs(pos[j] - t), default=None)
+            if j is not None and abs(pos[j] - t) <= max_distance:
+                out.loc[qid, ["neighbour", "distance"]] = [ids[j], abs(pos[j] - t)]
+    return out
+
+
+def coexpression(locus_expr, gene_expr, neighbours, null_pairs, bins=DISTANCE_BINS):
+    """
+    Spearman rho between each locus and its neighbour gene over the shared samples, minus the median rho of
+    `null_pairs` (gene -> neighbour gene, distance) in the same distance bin. Returns rho, null and excess.
+    """
+    ranks_l = locus_expr.rank(axis=1)
+    ranks_g = gene_expr.rank(axis=1)
+
+    def rho(a, b):
+        a, b = a - a.mean(), b - b.mean()
+        den = np.sqrt((a ** 2).sum() * (b ** 2).sum())
+        return float((a * b).sum() / den) if den > 0 else np.nan
+
+    def bin_of(d):
+        return np.digitize(d, bins[1:-1])
+
+    nul = null_pairs.dropna(subset=["neighbour"])
+    nul = nul[nul.index.isin(ranks_g.index) & nul["neighbour"].isin(ranks_g.index)]
+    nul_rho = [rho(ranks_g.loc[a].to_numpy(), ranks_g.loc[b].to_numpy()) for a, b in nul["neighbour"].items()]
+    null_median = pd.Series(nul_rho, index=nul.index).groupby(bin_of(nul["distance"].to_numpy())).median()
+
+    out = pd.DataFrame(index=locus_expr.index, columns=["neighbour", "distance", "coexpr_rho", "coexpr_null"])
+    for lid, r in neighbours.dropna(subset=["neighbour"]).iterrows():
+        if lid not in ranks_l.index or r["neighbour"] not in ranks_g.index:
+            continue
+        out.loc[lid] = [r["neighbour"], r["distance"],
+                        rho(ranks_l.loc[lid].to_numpy(), ranks_g.loc[r["neighbour"]].to_numpy()),
+                        null_median.get(bin_of(r["distance"]), np.nan)]
+    out = out.astype({"distance": float, "coexpr_rho": float, "coexpr_null": float})
+    out["coexpr_excess"] = out["coexpr_rho"] - out["coexpr_null"]
+    return out
+
+
 def small_rna_genes(gencode_exons, wgrna):
     """
     snoRNA / scaRNA / miRNA genes of GENCODE and of UCSC wgRna (snoRNABase + miRBase; GENCODE v42 lacks e.g. the
@@ -135,8 +198,7 @@ def small_rna_genes(gencode_exons, wgrna):
 
 def small_rna_hosts(loci_tx, small_rnas):
     """Per locus: number of small-RNA genes (small_rna_genes) within its span on the same strand."""
-    span = loci_tx.groupby("gene_id").agg(chrom=("chrom", "first"), start0=("start0", "min"),
-                                          end1=("end1", "max"), strand=("strand", "first"))
+    span = gene_spans(loci_tx, "gene_id")
     by = {(c, s): g for (c, s), g in small_rnas.groupby(["chrom", "strand"])}
     out = pd.Series(0.0, index=span.index)
     for lid, r in span.iterrows():
@@ -148,8 +210,11 @@ def small_rna_hosts(loci_tx, small_rnas):
 
 # ---------------------------------------------------------------- features and scores
 
-def features(orfs, qc_table, peptides, stop_dist, position, small_rna):
-    """Raw feature values per ORF (index of `orfs`)."""
+def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=None, encode=None):
+    """
+    Raw feature values per ORF (index of `orfs`). `coexpr`: locus -> co-expression excess (coexpression);
+    `encode`: locus table of encode.features.
+    """
     f = pd.DataFrame(index=orfs.index)
     num = lambda c: pd.to_numeric(orfs[c], errors="coerce")
     pep = peptides.reindex(orfs["orf_id"]).fillna(0)
@@ -165,10 +230,17 @@ def features(orfs, qc_table, peptides, stop_dist, position, small_rna):
     f["m2_other_translated_orfs"] = (per_locus - translated.astype(int)).astype(float)
     f["m3_neighbour_position"] = orfs["locus_id"].map(position).to_numpy()
     f["m3_low_polysome"] = -num("MRL_pct_vs_mRNA")
+    f["m3_coexpression"] = orfs["locus_id"].map(coexpr).to_numpy() if coexpr is not None else np.nan
+    enc = encode if encode is not None else pd.DataFrame(columns=["nuclear_log2ratio"])
+    nuclear = orfs["locus_id"].map(enc["nuclear_log2ratio"]).astype(float).to_numpy()
+    # m2_upf1_kd stays missing: the ENCODE HepG2 UPF1 shRNA knock-down does not inhibit NMD (encode.py)
+    f["m3_nuclear"] = nuclear
     f["m4_copy_number"] = num("log2TPM_HepG2")
     f["m4_no_cis"] = 1.0 - f["m3_neighbour_position"]
+    f["m4_nuclear"] = nuclear
     max_share = f["m1_orf_share"].groupby(orfs["locus_id"]).transform("max")
     f["m5_ribosome_no_dominant_orf"] = num("MRL_pct_vs_mRNA") * (1.0 - max_share)
+    f["m5_cytoplasmic"] = -nuclear
     f["m6_small_rna_host"] = orfs["locus_id"].map(small_rna).to_numpy()
     return f
 

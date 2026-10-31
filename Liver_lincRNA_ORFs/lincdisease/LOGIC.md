@@ -42,7 +42,8 @@ Flags:
 1. copy-specific expression and translation: fraction of P-sites from uniquely mapped reads, in-frame P-sites on
    positions that differ from the paralogs, uniquely mapped RNA-seq coverage and copy-specific splice junctions;
 2. copy-specific peptides: identified peptides (proteomics, immunopeptidomics) covering residues that differ from
-   the paralogs (1 if present; missing otherwise, as absence of peptides is not evidence against the copy);
+   the paralogs (1 if present; missing otherwise, as absence of peptides is not evidence against the copy).
+   Implemented as a peptide absent from canonical proteins and contaminants that maps to this lincORF only;
 3. selection on the copy: 1 - min(Ka/Ks, 1) between the ORF and its parent/paralog ORFs, ORF integrity since
    duplication;
 4. alignment attribution: age of the duplication, (0.98 - identity) / 0.08 clipped to 0-1 (identity = segmental
@@ -85,7 +86,7 @@ Values (`ncov`): summed coverage / number of quantifiable positions / the sample
 |:---|:---|:---|
 | D1 | Disease-associated expression | HCC: rank-biserial correlation r of TCGA-LIHC primary tumours vs adjacent normals of the same patients (matched pairs, Wilcoxon) and of tumours vs GTEx liver (Mann-Whitney; AUC = (r+1)/2); statistic = mean of the two r (log2FC and BH-FDR reported); replication in independent HCC cohorts. Chronic liver disease: association with fibrosis stage and MASH activity, and disease vs control liver, in MASLD/MASH and viral-hepatitis cohorts. HCC carries 0.7 and chronic liver disease 0.3 of D1. |
 | D2 | Prognosis | Cox models of overall survival and progression-free interval in TCGA-LIHC (TCGA-CDR endpoints; one primary tumour per patient) on standardized expression, adjusted for age and stage (I-II vs III-IV); loci expressed in < 20% of tumours are not tested; statistic = mean Wald z of OS and PFI (HR per SD and BH-FDR reported) |
-| D3 | Somatic genome | Copy-number-driven expression in cis (CN-expression correlation, gain/loss frequency); promoter-methylation silencing (450K methylation vs expression). In-ORF mutations are reported but not scored (exome capture barely covers lincRNAs). |
+| D3 | Somatic genome | TCGA-LIHC primary tumours (GDC GRCh38 data from the UCSC Xena GDC hub). Copy number: masked CN segment value (log2 ratio) at the midpoint of the locus span; Spearman rho of CN vs expression; gain / loss frequency (> +0.3 / < -0.3). Methylation: 450K probes within -1500..+500 nt of any isoform TSS, mean beta per sample; Spearman rho of beta vs expression; delta_beta = median beta in adjacent normals - median in tumours. Signed parts: d3_cn = max(rho_CN, 0) x (gain - loss frequency); d3_meth = max(-rho_meth, 0) x clip(delta_beta / 0.2, -1, 1); statistic = the part with the larger magnitude. In-ORF mutations are reported but not scored (exome capture barely covers lincRNAs). |
 | D4 | Germline genetics | GWAS Catalog associations with whitelisted liver traits (EFO labels of HCC, MASLD/MASH, liver fibrosis, cirrhosis, alcoholic liver disease, viral hepatitis, ...; ALT, AST, GGT) within the locus span +- 50 kb (LD-window proxy); statistic = largest -log10 p (0 without association), reported per trait class (disease / enzyme); GTEx liver eQTLs where the gene is annotated |
 | D5 | Prior knowledge | Europe PMC, title or abstract: exact symbol or an HGNC previous symbol / alias (up to 5; only aliases of >= 5 characters that contain a digit and are not another gene's approved symbol, as words like ALIEN or short tokens like LEU2 collect unrelated papers), AND an RNA term (guards against symbols that are words), AND a liver term; counts of all, liver, review and retracted papers; statistic = log2(1 + liver papers - retracted). Exact-phrase matching keeps papers on LINC01089 from being credited to LINC01090. Loci named only by an Ensembl or StringTie id count 0. |
 | D6 | Liver context | Equal-weight composite of the percentiles of: median expression in GTEx liver; liver specificity (liver median minus the largest median of the other GTEx tissues); max(log2 TPM HepG2, Huh7) from `lincorfz` |
@@ -107,6 +108,9 @@ and common alleles), and the number of lincORF-specific HLA-I immunopeptides (`l
 ## Step 4. Mechanism classes (per ORF, with locus-level features)
 
 Features are ranked against all ORFs of the run; locus-level features are copied to every ORF of the locus.
+ENCODE HepG2 features use stranded signal bigWigs of uniquely mapped reads (two replicates, averaged), as mean
+signal per quantifiable position on the locus strand: nuclear enrichment = log2 (nucleus + 0.01) / (cytosol +
+0.01) from CeFra-seq, cytoplasmic enrichment its negative; missing if both conditions have < 0.05 signal per base.
 Each class has an absolute evidence score (mean of its feature percentiles, missing features counting 0.5) and a
 relative share (its score divided by the sum over classes). Classes are not mutually exclusive; a class is called
 dominant only if its share exceeds the next one by >= 0.05.
@@ -114,8 +118,8 @@ dominant only if its share exceeds the next one by >= 0.05.
 | Class | Features |
 |:---|:---|
 | M1 Encoded peptide | Translation strength (pooled log10 Bayes factor) and fraction of the transcript's P-sites in the ORF (`lincorfz`); identified peptides (proteomics peptides absent from canonical proteins, plus lincORF-specific immunopeptides); independent translation evidence (GENCODE Ribo-seq ORFs, OpenProt); PhyloCSF weighted by copy-attribution confidence (0.5 + (percentile - 0.5) x confidence); ORF vs non-ORF exon conservation; transmembrane, signal-peptide, Pfam features; low predicted disorder; length; hits in published sORF frameshift CRISPR screens |
-| M2 Translation-coupled RNA regulation | Stop codon > 50 nt upstream of the last exon junction (NMD substrate); upregulation upon UPF1 knock-down (ENCODE HepG2); number of other translated ORFs (moderate/strong evidence) on the locus |
-| M3 Cis-regulation of a neighbour (RNA or DNA element) | Divergent (head-to-head, TSSs within 5 kb) or antisense (exon overlap) position next to a protein-coding gene; co-expression with the neighbour across TCGA and GTEx (vs gene pairs at matched distances); nuclear enrichment (ENCODE HepG2 fractionation); enhancer-like chromatin at the TSS in HepG2; low polysome association (low isoform MRL percentile) |
+| M2 Translation-coupled RNA regulation | Stop codon > 50 nt upstream of the last exon junction (NMD substrate); upregulation upon NMD inhibition (missing: the ENCODE HepG2 UPF1 shRNA knock-down lowers UPF1 mRNA by only ~30% and does not raise canonical NMD targets such as GAS5, ATF4, GADD45B, TBL2, so it is not used); number of other translated ORFs (moderate/strong evidence) on the locus |
+| M3 Cis-regulation of a neighbour (RNA or DNA element) | Divergent (head-to-head, TSSs within 5 kb) or antisense (exon overlap) position next to a protein-coding gene; co-expression with the nearest protein-coding gene (TSS distance <= 100 kb, either strand; recount3 gene sums) across TCGA-LIHC and GTEx liver: Spearman rho minus the median rho of nearest protein-coding gene pairs in the same TSS-distance bin (0-5, 5-20, 20-50, 50-100 kb); nuclear enrichment (ENCODE HepG2 fractionation); enhancer-like chromatin at the TSS in HepG2; low polysome association (low isoform MRL percentile) |
 | M4 Trans-acting RNA, nuclear | Nuclear enrichment; high copy number (HepG2 TPM); HepG2 eCLIP binding by chromatin/transcription-related RBPs; no cis signature |
 | M5 Trans-acting RNA, cytoplasmic | Cytoplasmic enrichment; HepG2 eCLIP binding by cytoplasmic RBPs; ribosome association without one dominant ORF (MRL percentile x (1 - largest ORF share of P-sites on the locus)); miRNA-site density (low weight) |
 | M6 Small-RNA host | snoRNA, scaRNA or miRNA genes within the locus span on the same strand (GENCODE plus UCSC wgRna, as GENCODE lacks e.g. the GAS5 snoRNAs); snoRNA-host-gene features |
@@ -129,7 +133,7 @@ Controls are processed by the same code as the candidates (added as extra loci/O
 | D1 HCC | HULC (up), LINC00261 (down) | correct direction, FDR < 0.05 |
 | D1 chronic liver disease | to be fixed after cohort selection (a fibrosis-associated gene, e.g. COL1A1) | positive association with fibrosis stage |
 | D2 | BIRC5, CYTOR | HR > 1 |
-| D3 | PVT1 (CN-driven, 8q24 with MYC), MEG3 (methylation-silenced) | CN-expression correlation; methylation-expression anticorrelation |
+| D3 | PVT1 (CN-driven, 8q24 with MYC), MEG3 (methylation-silenced) | PVT1: rho_CN > 0 (FDR < 0.05) and D3 > 0; MEG3: rho_meth < 0 (FDR < 0.05) |
 | D4 | PNPLA3, TM6SF2 | liver-trait GWAS association |
 | D5 | HULC (positive), LINC01090 (negative, symbol collision) | HULC high; no LINC01089 papers credited to LINC01090 |
 | D6 | HNF1A-AS1 | liver-specific |
@@ -164,4 +168,5 @@ Per ORF (`lincdisease.orfs.tsv`; candidates only in `lincdisease.candidates.tsv`
 copy-attribution confidence, disease components, disease score (+ direction, coverage, no-D5 version),
 actionability score, mechanism class scores and relative shares, dominant class. Per locus (`disease.loci.tsv`):
 all locus-level statistics, percentiles and components, for loci and controls. Step tables: `qc.orfs.tsv`,
-`mechanism.orfs.tsv`, `D4.gwas.tsv`, `D5.literature.tsv`, `quant/`; control panel: `controls.tsv`. Location: `${WF_RUNS_DIR}Liver_lincRNA_ORFs_Claude/disease_mechanism/<run>/`.
+`peptides.orfs.tsv`, `mechanism.orfs.tsv`, `coexpression.loci.tsv`, `encode.loci.tsv`, `D3.somatic.tsv`,
+`D4.gwas.tsv`, `D5.literature.tsv`, `quant/`; control panel: `controls.tsv`. Location: `${WF_RUNS_DIR}Liver_lincRNA_ORFs_Claude/disease_mechanism/<run>/`.
