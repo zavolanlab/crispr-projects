@@ -31,6 +31,7 @@ URLS = {
     # TCGA PanCanAtlas ABSOLUTE purity / ploidy (Taylor et al. 2018)
     "tcga_purity": "https://api.gdc.cancer.gov/data/4f277128-f793-4354-a13d-30cc7fe9f6b5",
     # all GTEx samples of recount3 with their tissue (project)
+    "hg19_to_hg38_chain": "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/liftOver/hg19ToHg38.over.chain.gz",
     "gtex_projects": "https://recount-opendata.s3.amazonaws.com/recount3/release/human/data_sources/gtex/metadata/"
                      "gtex.recount_project.MD.gz",
 }

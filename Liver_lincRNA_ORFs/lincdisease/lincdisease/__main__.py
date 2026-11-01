@@ -121,12 +121,20 @@ def cmd_support(args):
     tx_exons = quant.read_gtf_exons(os.path.join(args.results_dir, "lincRNAs", "lincRNA_transcripts.gtf"))
     regions = pd.read_csv(os.path.join(args.out_dir, "quant", "regions.tsv"), sep="\t")
     cons = peptide.conservation_contrast(orfs, tx_exons, bigwig=args.phylop, threads=args.threads, regions=regions)
-    d = os.path.join(args.data_dir, "crispr_screens", "NIHMS1698134-supplement-Supplementary_Tables_")
-    screen = screens.read_prensner(d + "1-17.xlsx", d + "21-32.xlsx")
-    out = pd.concat([orfs[["orf_id"]], cons, screens.match(orfs, screen, "prensner")], axis=1)
+    d = os.path.join(args.data_dir, "crispr_screens")
+    p = os.path.join(d, "NIHMS1698134-supplement-Supplementary_Tables_")
+    prensner = screens.match(orfs, screens.read_prensner(p + "1-17.xlsx", p + "21-32.xlsx"), "prensner",
+                             {"hepg2_lfc": "min", "resolved": "max"})
+    chain = screens.read_chain(resources.fetch("hg19_to_hg38_chain", args.data_dir))
+    chen = screens.match(orfs, screens.read_chen(d, chain), "chen",
+                         {"K562_phenotype": "min", "K562_fdr": "min", "iPSC_phenotype": "min", "iPSC_fdr": "min"})
+    out = pd.concat([orfs[["orf_id"]], cons, prensner, chen], axis=1)
+    out["crispr_screen_value"] = screens.combined_value(out["prensner_value"], out["prensner_resolved"] == 1,
+                                                        out["chen_value"])
     out.to_csv(os.path.join(args.out_dir, "support.orfs.tsv"), sep="\t", index=False)
-    print(f"support: PhyloP contrast for {out['phylop_orf_minus_nonorf'].notna().sum()} ORFs; Prensner screen "
-          f"matches {(out['prensner_orfs'] != '').sum()}, values {out['prensner_value'].value_counts().to_dict()}")
+    print(f"support: PhyloP contrast for {out['phylop_orf_minus_nonorf'].notna().sum()} ORFs; screen matches "
+          f"Prensner {(out['prensner_orfs'] != '').sum()}, Chen {(out['chen_orfs'] != '').sum()}; combined values "
+          f"{out['crispr_screen_value'].value_counts().to_dict()}")
 
 
 def cmd_regions(args):

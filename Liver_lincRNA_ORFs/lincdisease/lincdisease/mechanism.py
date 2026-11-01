@@ -259,7 +259,7 @@ def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=No
     if orf_support is not None:
         sup = orf_support.reindex(orfs["orf_id"])
         f["m1_phylop_contrast"] = sup["phylop_orf_minus_nonorf"].astype(float).to_numpy()
-        f["m1_crispr_screen"] = sup["prensner_value"].astype(float).to_numpy()
+        f["m1_crispr_screen"] = sup["crispr_screen_value"].astype(float).to_numpy()
     return f
 
 
