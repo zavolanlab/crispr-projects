@@ -33,6 +33,7 @@ def orf_table(orfs, qc_table, disease_loci, mech, act):
                     "comp_D1", "comp_D2", "comp_D3", "comp_D4", "comp_D5", "comp_D6",
                     "log2FC_paired", "fdr_paired", "auc_vs_gtex", "fdr_vs_gtex",
                     "stat_D1_chronic", "chronic_fdr", "hoang_r", "hoang_p", "suppli_r", "suppli_p", "hcv_r", "hcv_p",
+                    "D1_chronic_cell", "chronic_cell_fdr", "parent_gene", "parent_rho", "parent_driven",
                     "HR_OS", "fdr_OS", "HR_PFI",
                     "fdr_PFI", "gwas_top_trait", "gwas_top_snp", "gwas_disease_max", "gwas_enzyme_max",
                     "n_liver", "n_review", "n_retracted", "tumour_specificity"]

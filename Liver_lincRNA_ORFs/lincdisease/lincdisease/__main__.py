@@ -8,7 +8,7 @@ Command-line driver of lincdisease; one sub-command per step of LOGIC.md, each w
   python -m lincdisease regions  --results-dir R --candidates T --data-dir D --out-dir O
   python -m lincdisease manifest --out-dir O [--gtex-per-tissue 10]
   python -m lincdisease quant    --out-dir O --project LIHC [--worker 0 --n-workers 4] [--scratch S]
-  python -m lincdisease chronic  --out-dir O --manifest; then quant --sample-set quant_sra; then chronic --out-dir O
+  python -m lincdisease chronic  --out-dir O --manifest; then quant --sample-set quant_sra; then chronic --out-dir O --data-dir D
   python -m lincdisease literature --results-dir R --candidates T --data-dir D --out-dir O
   python -m lincdisease genetics --results-dir R --candidates T --data-dir D --out-dir O
   python -m lincdisease somatic  --results-dir R --candidates T --data-dir D --out-dir O
@@ -205,13 +205,30 @@ def cmd_chronic(args):
     samples = pd.read_csv(os.path.join(d, "samples.tsv"), sep="\t")
     samples = samples[samples["sample_id"].isin(sums["sample_id"])]
     ncov = quant.normalize(sums, feats, samples)
-    res = chronic.d1_chronic(ncov, samples.set_index("sample_id")[["cohort", "fibrosis_stage", "nas", "group"]],
-                             pseudocount=args.pseudocount)
+    genes = pd.concat([quant.read_gene_sums(resources.fetch(f"sra_{p}_genes", args.data_dir,
+                                                            url=quant.gene_sums_url("sra", p)), "sra", samples)
+                       for p in chronic.COHORTS.values()], axis=1)
+    qc = pd.concat([pd.read_csv(resources.fetch(f"sra_{p}_qc", args.data_dir,
+                                                url=quant._metadata_url("sra", p, "recount_qc")),
+                                sep="\t", low_memory=False) for p in chronic.COHORTS.values()])
+    qc.index = "sra:" + qc["external_id"].astype(str)
+    gtf = quant.read_gtf_exons(resources.fetch("gencode_gtf", args.data_dir)).drop_duplicates("gene_id")
+    gtf["gene_id"] = gtf["gene_id"].str.split(".").str[0]
+    symbol_to_id = dict(zip(gtf["gene_name"], gtf["gene_id"]))
+    # parent gene of each locus: the homology parent of its ORF with the highest identity
+    orfq = pd.read_csv(os.path.join(args.out_dir, "qc.orfs.tsv"), sep="\t").dropna(subset=["homolog_parent"])
+    best = orfq.sort_values("homolog_pident", ascending=False).drop_duplicates("locus_id").set_index("locus_id")
+    parents = best["homolog_parent"].map(symbol_to_id).dropna()
+    res, sf = chronic.d1_chronic(ncov, samples.set_index("sample_id")[["cohort", "fibrosis_stage", "nas", "group"]],
+                                 genes, qc, symbol_to_id, gtf.loc[gtf["gene_type"] == "protein_coding", "gene_id"],
+                                 parents=parents, pseudocount=args.pseudocount)
+    sf.rename("size_factor").to_csv(os.path.join(d, "size_factors.tsv"), sep="\t", index_label="sample_id")
     unq = ~feats["quantifiable"].reindex(res.index).fillna(False).astype(bool)
     res.loc[unq, "D1_chronic"] = float("nan")
     path = os.path.join(args.out_dir, "D1.chronic.tsv")
     res.to_csv(path, sep="\t", index_label="feature_id")
-    print(f"wrote {path}; tested {res['D1_chronic'].notna().sum()}, FDR < 0.05: {(res['chronic_fdr'] < 0.05).sum()}")
+    print(f"wrote {path}; tested {res['D1_chronic'].notna().sum()}, FDR < 0.05: {(res['chronic_fdr'] < 0.05).sum()}, "
+          f"parent-driven: {res['parent_driven'].sum()}")
 
 
 def cmd_literature(args):
@@ -530,6 +547,7 @@ def main():
     ch = sub.add_parser("chronic", help="Step 3, D1 chronic liver disease (SRA cohorts in quant_sra/)")
     ch.add_argument("--manifest", action="store_true", help="write quant_sra/samples.tsv (needs network)")
     ch.add_argument("--pseudocount", type=float, default=0.05)
+    ch.add_argument("--data-dir", help="download cache (recount3 gene sums and QC, GENCODE); not needed with --manifest")
     ch.set_defaults(func=cmd_chronic)
 
     lt = sub.add_parser("literature", help="Step 3, D5: Europe PMC counts")
