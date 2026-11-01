@@ -30,7 +30,7 @@ def _ids(value):
 def feature_genes(loci, control_names, egenes):
     """DataFrame feature_id/gene_id (unversioned) linking loci and controls to GTEx genes."""
     rows = [(fid, g) for fid, r in loci.iterrows()
-            for g in set(_ids(r.get("name_source_gene_ids")) + _ids(r.get("lncRNA_gene_ids")))]
+            for g in sorted(set(_ids(r.get("name_source_gene_ids")) + _ids(r.get("lncRNA_gene_ids"))))]
     by_name = egenes.assign(g=egenes["gene_id"].str.split(".").str[0]).groupby("gene_name")["g"].first()
     rows += [(f"ctrl:{n}", by_name[n]) for n in control_names if n in by_name.index]
     return pd.DataFrame(rows, columns=["feature_id", "gene_id"]).drop_duplicates()

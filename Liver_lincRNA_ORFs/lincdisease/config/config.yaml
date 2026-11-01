@@ -1,0 +1,30 @@
+# Paths of the lincdisease workflow, relative to the root directory given at run time
+# (run.sh --root DIR; default: the current directory). Inputs that live elsewhere are linked into <root>/inputs/
+# (see workflow/README.md). Absolute paths are also accepted.
+
+# lincorfz run that the annotation starts from (read only)
+results_dir: inputs/lincorfz_results
+candidates: inputs/lincorfz_results/final/lincORFs.subselection.ranked.tsv.csv
+# proteomics/ and peptidomics/ results of the lincorfz notebook
+peptides_dir: inputs/lincorfz_peptides
+phylop: inputs/PhyloP100way.bw
+
+# outputs (the workflow runs in this directory) and the download cache
+out_dir: disease_mechanism/v2
+data_dir: lincdisease_data
+
+# software: conda environments built from envs/lincdisease.yml and envs/lincdisease_peptide.yml
+python: conda_envs/lincdisease/bin/python
+diamond: conda_envs/lincdisease/bin/diamond
+tool_env: conda_envs/lincdisease_peptide
+
+# recount3 bigWig streaming (login node); changing these after a run re-partitions the samples
+quant_workers: 6
+quant_sra_workers: 4
+
+govaere:
+  runs: config/govaere_runs.tsv            # ENA run table of PRJNA558102 (relative to the lincdisease directory)
+  dir: external_data/govaere2020
+  reference: lincdisease_data/reference
+  max_fastq_gb: 60                         # downloads wait while this much FASTQ is on disk
+  modules: STAR/2.7.11b-GCC-13.3.0 SAMtools/1.21-GCC-13.3.0

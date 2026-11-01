@@ -41,6 +41,39 @@ FILENAMES = {"tcga_cdr": "TCGA-CDR-SupplementalTableS1.xlsx",
              "tcga_purity": "TCGA_mastercalls.abs_tables_JSedit.fixed.txt",
              "eclip_search": "files.json", "rbp_localisation": "vannostrand2020_S3.xlsx"}
 
+# files placed in the data directory by hand (no stable direct URL, or extracted from a larger archive):
+# path relative to the data directory -> where to get it
+GENCODE42 = "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_42/"
+UNIPROT_HUMAN = ("https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/reference_proteomes/"
+                 "Eukaryota/UP000005640/")
+PRENSNER = "Prensner et al. 2021 (Nat Biotechnol), PMC supplement NIHMS1698134"
+MANUAL = {
+    "homology/GRCh38.primary_assembly.genome.fa.gz": GENCODE42 + "GRCh38.primary_assembly.genome.fa.gz",
+    "homology/gencode.v42.pc_translations.fa.gz": GENCODE42 + "gencode.v42.pc_translations.fa.gz",
+    "homology/gencode.v42.pc_transcripts.fa.gz": GENCODE42 + "gencode.v42.pc_transcripts.fa.gz",
+    "homology/UP000005640_9606.fasta.gz": UNIPROT_HUMAN + "UP000005640_9606.fasta.gz",
+    "homology/UP000005640_9606_additional.fasta.gz": UNIPROT_HUMAN + "UP000005640_9606_additional.fasta.gz",
+    "riboseq_orfs/phase1/Ribo-seq_ORFs.peptideins.bed": "https://www.gencodegenes.org/pages/riboseq_orfs/ (phase 1)",
+    "riboseq_orfs/phase2/Ribo-seq_ORFs.comprehensive.bed": "https://www.gencodegenes.org/pages/riboseq_orfs/ (phase 2)",
+    "Pfam-A.hmm": "https://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.hmm.gz (gunzip)",
+    "crispr_screens/NIHMS1698134-supplement-Supplementary_Tables_1-17.xlsx": PRENSNER,
+    "crispr_screens/NIHMS1698134-supplement-Supplementary_Tables_21-32.xlsx": PRENSNER,
+    **{f"crispr_screens/aay0262_table_{n}.xlsx": "Chen et al. 2020 (Science, doi 10.1126/science.aay0262), "
+                                                 "supplementary tables" for n in ("s1", "s3", "s4")},
+    "gtex_eqtl/GTEx_Analysis_v8_eQTL/Liver.v8.egenes.txt.gz":
+        "curl -s <eqtl.GTEX_TAR> | tar -x -C <data_dir>/gtex_eqtl --wildcards '*Liver.v8.egenes*' '*Liver.v8.signif*'",
+    "gtex_eqtl/GTEx_Analysis_v8_eQTL/Liver.v8.signif_variant_gene_pairs.txt.gz": "as Liver.v8.egenes.txt.gz",
+    "mhcflurry/2.3.0/models_class1_presentation":
+        "MHCFLURRY_DATA_DIR=<data_dir>/mhcflurry <tool_env>/bin/mhcflurry-downloads fetch models_class1_presentation",
+}
+
+
+def missing_manual(data_dir):
+    """(path, source) of the hand-placed files that are not in data_dir."""
+    return [(os.path.join(data_dir, p), src) for p, src in MANUAL.items()
+            if not os.path.exists(os.path.join(data_dir, p))]
+
+
 # columns of UCSC genomicSuperDups.txt (bin first)
 SEGDUP_COLUMNS = ["bin", "chrom", "chromStart", "chromEnd", "name", "score", "strand", "otherChrom",
                   "otherStart", "otherEnd", "otherSize", "uid", "posBasesHit", "testResult", "verdict",

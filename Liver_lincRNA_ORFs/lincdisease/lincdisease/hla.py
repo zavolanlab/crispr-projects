@@ -82,6 +82,7 @@ def predict(seqs, chunk=500, control_path=None):
 
 def run(orfs, python, out_path, env=None):
     """Write the ORF peptides, run `python -m lincdisease.hla` in the MHCflurry environment, read the result."""
+    out_path = os.path.abspath(out_path)     # the subprocess runs in the package directory
     seq_path = out_path + ".input.tsv"
     seqs = orfs.set_index("orf_id")["aa_seq"].fillna("").str.rstrip("*")
     seqs.rename("aa_seq").to_csv(seq_path, sep="\t")

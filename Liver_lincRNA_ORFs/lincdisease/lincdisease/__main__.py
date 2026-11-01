@@ -1,6 +1,7 @@
 """
 Command-line driver of lincdisease; one sub-command per step of LOGIC.md, each writing into --out-dir.
 
+  python -m lincdisease fetch    --data-dir D --out-dir O   (login node: all downloads)
   python -m lincdisease qc       --results-dir R --candidates T --data-dir D --peptides-dir P --out-dir O
   python -m lincdisease homology --results-dir R --candidates T --data-dir D --out-dir O [--diamond PATH]
   python -m lincdisease peptide  --results-dir R --candidates T --data-dir D --out-dir O --tool-env ENV
@@ -15,8 +16,9 @@ Command-line driver of lincdisease; one sub-command per step of LOGIC.md, each w
   python -m lincdisease encode   --results-dir R --candidates T --data-dir D --out-dir O
   python -m lincdisease mechanism --results-dir R --candidates T --data-dir D --out-dir O
   python -m lincdisease disease  --results-dir R --candidates T --data-dir D --out-dir O
-  python -m lincdisease weights  --results-dir R --candidates T --data-dir D --out-dir O
+  python -m lincdisease weights  --results-dir R --candidates T --data-dir D --out-dir O   (disease_score_fitted.tsv)
   python -m lincdisease report   --results-dir R --candidates T --data-dir D --out-dir O
+  python -m lincdisease html     --out-dir O
 
 R: lincorfz results/ directory (background); T: candidate ORF table; D: download cache of public resources.
 """
@@ -31,7 +33,7 @@ import json
 
 from . import (chromatin, chronic, controls, disease, eclip, encode, eqtl, genetics, homology, inputs, integrate,
                hla, literature, mechanism, peptide, qc, quant, report, resources, screens, somatic, weights)
-from . import scoring
+from . import scoring, table_html
 
 
 def _common(p):
@@ -296,11 +298,46 @@ def cmd_somatic(args):
     print(f"wrote {path}; CN tested {res['cn_rho'].notna().sum()}, methylation tested {res['meth_rho'].notna().sum()}")
 
 
-def cmd_encode(args):
-    d = os.path.join(args.data_dir, "encode")
+def fetch_encode(data_dir):
+    """ENCODE HepG2 fractionation / UPF1 knock-down bigWigs, eCLIP IDR peaks and the RBP localisation table,
+    histone ChIP-seq bigWigs; returns the eCLIP file table."""
+    d = os.path.join(data_dir, "encode")
     for files in encode.BIGWIGS.values():
         for acc in (a for rep in files for a in rep):
             resources.fetch(acc, d, url=encode.ENCODE_DOWNLOAD.format(acc))
+    ed = os.path.join(d, "eclip")
+    files = eclip.idr_files(json.load(open(resources.fetch("eclip_search", ed, url=eclip.ENCODE_SEARCH))))
+    for acc in files["accession"]:
+        resources.fetch(acc, ed, url=eclip.ENCODE_BED.format(acc))
+    resources.fetch("rbp_localisation", ed, url=eclip.RBP_ANNOTATION)
+    cd = os.path.join(d, "chromatin")
+    for _, acc in chromatin.BIGWIGS.values():
+        resources.fetch(acc, cd, url=chromatin.ENCODE_DOWNLOAD.format(acc))
+    return files
+
+
+def cmd_fetch(args):
+    """Every public download used by the steps (needs network: run on the login node). Files already in
+    --data-dir are kept; files without a stable URL are only checked (resources.MANUAL)."""
+    for key in resources.URLS:
+        resources.fetch(key, args.data_dir)
+    for s, p in COEXPRESSION_PROJECTS:
+        resources.fetch(f"{s}_{p}_genes", args.data_dir, url=quant.gene_sums_url(s, p))
+    for p in chronic.COHORTS.values():
+        resources.fetch(f"sra_{p}_genes", args.data_dir, url=quant.gene_sums_url("sra", p))
+        resources.fetch(f"sra_{p}_qc", args.data_dir, url=quant._metadata_url("sra", p, "recount_qc"))
+    fetch_encode(args.data_dir)
+    missing = resources.missing_manual(args.data_dir)
+    for path, source in missing:
+        print(f"MISSING {path}\n    get it from: {source}")
+    if missing:
+        raise SystemExit(f"{len(missing)} manually downloaded files are missing from {args.data_dir}")
+    print(f"all resources present in {args.data_dir}")
+
+
+def cmd_encode(args):
+    d = os.path.join(args.data_dir, "encode")
+    files = fetch_encode(args.data_dir)
     loci = inputs.loci(inputs.load(args.results_dir, args.candidates))
     gencode = quant.read_gtf_exons(resources.fetch("gencode_gtf", args.data_dir))
     # stranded data: only same-strand GENCODE exons compete for reads (quant/regions.tsv is for unstranded data)
@@ -314,18 +351,13 @@ def cmd_encode(args):
           f"UPF1 KD for {res['upf1_kd_log2fc'].notna().sum()} features")
 
     ed = os.path.join(d, "eclip")
-    files = eclip.idr_files(json.load(open(resources.fetch("eclip_search", ed, url=eclip.ENCODE_SEARCH))))
-    for acc in files["accession"]:
-        resources.fetch(acc, ed, url=eclip.ENCODE_BED.format(acc))
     groups = eclip.rbp_groups(resources.fetch("rbp_localisation", ed, url=eclip.RBP_ANNOTATION))
     res = eclip.features(regions, strands, eclip.load_peak_sets(files, ed), groups)
     res.to_csv(os.path.join(args.out_dir, "eclip.loci.tsv"), sep="\t", index_label="feature_id")
     print(f"eclip: bound by >= 1 RBP: {(res['eclip_n_rbps'] > 0).sum()} of {len(res)} features")
 
     cd = os.path.join(d, "chromatin")
-    for _, acc in chromatin.BIGWIGS.values():
-        resources.fetch(acc, cd, url=chromatin.ENCODE_DOWNLOAD.format(acc))
-    tx = pd.read_csv(os.path.join(args.results_dir, "lincRNAs", "lincRNA_transcripts.tsv"), sep="\t")
+    tx =pd.read_csv(os.path.join(args.results_dir, "lincRNAs", "lincRNA_transcripts.tsv"), sep="\t")
     tss = chromatin.dominant_tss(tx, resources.fetch("gencode_gtf", args.data_dir), controls.control_genes())
     tss = tss[tss.index.isin(loci.index) | tss.index.str.startswith("ctrl:")]
     res = chromatin.features(tss, cd)
@@ -466,8 +498,8 @@ def cmd_weights(args):
     comp = dis[[f"comp_{c}" for c in weights.COMPONENTS]].rename(columns=lambda c: c[5:])
     y = weights.labels(dis[["symbol", "n_liver", "n_retracted"]], ~dis["is_control"], args.min_papers)
     w, summary = weights.fit(comp, y)
-    dis["disease_score_fitted"] = weights.fitted_score(comp, w)
-    dis.to_csv(path, sep="\t", index_label="feature_id")
+    weights.fitted_score(comp, w).rename("disease_score_fitted").to_csv(
+        os.path.join(args.out_dir, "disease_score_fitted.tsv"), sep="\t", index_label="feature_id")
     out = pd.concat([w.rename("weight"), pd.Series(summary, name="value")])
     out.to_csv(os.path.join(args.out_dir, "weights.tsv"), sep="\t", header=["value"], index_label="key")
     print(out.to_string())
@@ -479,6 +511,9 @@ def cmd_report(args):
     qct = read("qc.orfs.tsv").set_index("orf_id").reindex(orfs["orf_id"]).set_axis(orfs.index)
     mech = read("mechanism.orfs.tsv").set_index("orf_id").reindex(orfs["orf_id"]).set_axis(orfs.index)
     dis = read("disease.loci.tsv", index_col=0)
+    if os.path.exists(os.path.join(args.out_dir, "disease_score_fitted.tsv")):
+        dis = dis.drop(columns="disease_score_fitted", errors="ignore").join(
+            read("disease_score_fitted.tsv", index_col=0))
     peptides = read("peptides.orfs.tsv", index_col=0)
     act = report.actionability(orfs, dis, peptides, read("hla.orfs.tsv", index_col=0))
     table = report.orf_table(orfs, qct, dis, mech, act)
@@ -493,6 +528,18 @@ def cmd_report(args):
     print(ctrl.to_string(index=False))
     print(f"wrote lincdisease.orfs.tsv, lincdisease.candidates.tsv, lincdisease.screen_supported.tsv, controls.tsv "
           f"to {args.out_dir}")
+
+
+def cmd_html(args):
+    """lincdisease.table.html: candidates and screen-supported ORFs, sortable, summary scores first."""
+    read = lambda name, **kw: pd.read_csv(os.path.join(args.out_dir, name), sep="\t", low_memory=False, **kw)
+    t = table_html.rows(read("lincdisease.orfs.tsv"), read("support.orfs.tsv"), read("mechanism.orfs.tsv"),
+                        read("disease.loci.tsv", index_col=0), read("peptides.orfs.tsv", index_col=0),
+                        read("hla.orfs.tsv", index_col=0))
+    path = os.path.join(args.out_dir, "lincdisease.table.html")
+    with open(path, "w") as fh:
+        fh.write(table_html.build(t))
+    print(f"wrote {path}: {len(t)} ORFs")
 
 
 def main():
@@ -525,6 +572,10 @@ def main():
     su.add_argument("--phylop", default=peptide.PHYLOP_URL, help="PhyloP100way bigWig (path or URL)")
     su.add_argument("--threads", type=int, default=4)
     su.set_defaults(func=cmd_support)
+
+    fe = sub.add_parser("fetch", help="All public downloads into --data-dir (needs network); checks hand-placed files")
+    fe.add_argument("--data-dir", required=True)
+    fe.set_defaults(func=cmd_fetch)
 
     r = sub.add_parser("regions", help="Step 2: quantifiable exonic regions of loci and controls")
     _common(r)
@@ -593,6 +644,10 @@ def main():
     rp = sub.add_parser("report", help="Outputs: per-ORF table, candidates, control panel")
     _common(rp)
     rp.set_defaults(func=cmd_report)
+
+    ht = sub.add_parser("html", help="Outputs: sortable HTML table of the candidates and screen-supported ORFs")
+    ht.add_argument("--data-dir", help="unused; accepted for a uniform command line")
+    ht.set_defaults(func=cmd_html)
 
     args = p.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)

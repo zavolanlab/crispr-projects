@@ -200,7 +200,8 @@ non-retracted liver papers (D5 counts); negatives = background loci with an HGNC
 labelled. Model: logistic regression on the component percentiles (missing = 0.5) with non-negative coefficients and
 an L2 penalty chosen by 5-fold stratified cross-validated AUC; the refitted coefficients scaled to sum 1 are the
 weights. `weights.tsv` reports them with the cross-validated AUC and the AUC of the default weights on the same loci;
-`disease_score_fitted` is reported next to the default score, never in its place. Single-component AUCs are reported.
+`disease_score_fitted` (`disease_score_fitted.tsv`, joined into the ORF tables) is reported next to the default
+score, never in its place. Single-component AUCs are reported.
 
 Result on run v2 (184 positives, 1,111 negatives): the fit puts 0.82 on D3 and 0.18 on D4 (cross-validated AUC
 0.75; default weights 0.59); without D3 the AUC is 0.53. D3 separates the labels by ascertainment, not disease
@@ -220,4 +221,15 @@ actionability score, mechanism class scores and relative shares, dominant class.
 all locus-level statistics, percentiles and components, for loci and controls. Step tables: `qc.orfs.tsv`,
 `peptides.orfs.tsv`, `support.orfs.tsv`, `mechanism.orfs.tsv`, `coexpression.loci.tsv`, `encode.loci.tsv`, `D3.somatic.tsv`,
 `D1.chronic.tsv`, `D4.gwas.tsv`, `D4.eqtl.tsv`, `D5.literature.tsv`, `homology.orfs.tsv`, `peptide_features.orfs.tsv`, `hla.orfs.tsv`, `hla.control.tsv`, `eclip.loci.tsv`,
-`chromatin.loci.tsv`, `weights.tsv`, `quant/`, `quant_sra/`; control panel: `controls.tsv`. Location: `${WF_RUNS_DIR}Liver_lincRNA_ORFs_Claude/disease_mechanism/<run>/`.
+`chromatin.loci.tsv`, `weights.tsv`, `disease_score_fitted.tsv`, `quant/`, `quant_sra/`; control panel: `controls.tsv`.
+Browsable table: `lincdisease.table.html` (candidates and screen-supported ORFs; sortable; summary scores
+first, then D1-D6, M1-M6 and the detail; with an index of the scores). Methods with the derivations of every
+metric: `docs/methods.js` (builds `lincdisease_Methods.docx`). Location: `out_dir` of `config/config.yaml`,
+relative to the root directory given at run time.
+
+## Running
+
+The steps run as a Snakemake workflow (`workflow/`, started with `run.sh`; usage in `workflow/README.md`) that
+starts from the finished lincorfz run and the candidate table. Public data are downloaded once into the data
+directory by the `fetch` step on the login node (compute nodes have no network); files without a stable URL are
+listed with their source in `resources.MANUAL` and checked by `fetch`.
