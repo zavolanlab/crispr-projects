@@ -82,22 +82,24 @@ def class_scores(features, classes):
     return pd.DataFrame(scores), pd.DataFrame(coverage)
 
 
-def relative_shares(scores):
-    """Share of each class: its score divided by the sum of the class scores of the same row."""
-    total = scores.sum(axis=1)
-    return scores.div(total.where(total > 0), axis=0)
+def standardized(scores, background):
+    """Class scores in standard deviations from the background mean, per class, so that classes with few or
+    coarse features (wider spread) do not win the comparison between classes by their spread alone."""
+    ref = scores[background]
+    return (scores - ref.mean()) / ref.std()
 
 
-def dominant_class(shares, margin):
-    """Top class if its share exceeds the second one by >= `margin`, else 'none'."""
+def dominant_class(z, margin):
+    """Top class if its standardized score is above the background mean (> 0) and exceeds the second one by
+    >= `margin` SD, else 'none'."""
     def pick(row):
         r = row.dropna().sort_values(ascending=False)
-        if r.empty:
+        if r.empty or r.iloc[0] <= 0:
             return "none"
         if len(r) == 1 or r.iloc[0] - r.iloc[1] >= margin:
             return r.index[0]
         return "none"
-    return shares.apply(pick, axis=1)
+    return z.apply(pick, axis=1)
 
 
 def consensus_direction(percentiles, signs, min_percentile, labels=("up", "down")):

@@ -52,8 +52,9 @@ FETCHED = "flags/fetch.done"
 NEEDS_FETCH = ancient(FETCHED)    # order only: a new download does not rerun the steps (use ./run.sh redo)
 QUANT = expand("flags/quant.{w}.done", w=range(NQ))
 QUANT_SRA = expand("flags/quant_sra.{w}.done", w=range(NS))
+QUANT_NMD = expand("flags/quant_nmd.{w}.done", w=range(NS))
 
-localrules: all, fetch, manifest, quant, chronic_manifest, quant_sra, literature, govaere, govaere_fastq
+localrules: all, fetch, manifest, quant, chronic_manifest, quant_sra, nmd_manifest, quant_nmd, literature, govaere, govaere_fastq
 
 include: "rules/govaere.smk"
 
@@ -101,6 +102,28 @@ rule quant_sra:
     output: touch("flags/quant_sra.{w}.done")
     log: "logs/quant_sra.{w}.log"
     shell: "{LD} quant --sample-set quant_sra --worker {wildcards.w} --n-workers {NS} --scratch quant_sra > {log} 2>&1"
+
+
+rule nmd_manifest:
+    input: NEEDS_FETCH
+    output: "quant_nmd/samples.tsv"
+    log: "logs/nmd_manifest.log"
+    shell: "{LD} nmd --manifest > {log} 2>&1"
+
+
+rule quant_nmd:
+    input: ancient("quant/regions.tsv"), ancient("quant_nmd/samples.tsv")
+    output: touch("flags/quant_nmd.{w}.done")
+    log: "logs/quant_nmd.{w}.log"
+    shell: "{LD} quant --sample-set quant_nmd --worker {wildcards.w} --n-workers {NS} --scratch quant_nmd > {log} 2>&1"
+
+
+rule nmd:
+    input: QUANT_NMD, "quant_nmd/samples.tsv", "quant/features.tsv", NEEDS_FETCH, src("nmd", "chronic")
+    output: "nmd.loci.tsv"
+    resources: mem_mb=mem(16), runtime=60
+    log: "logs/nmd.log"
+    shell: "{LD} nmd --data-dir {D} > {log} 2>&1"
 
 
 rule literature:
@@ -192,8 +215,8 @@ rule chronic:
 
 rule mechanism:
     input: ORFS, QUANT, "qc.orfs.tsv", "peptides.orfs.tsv", "encode.loci.tsv", "eclip.loci.tsv",
-           "chromatin.loci.tsv", "peptide_features.orfs.tsv", "support.orfs.tsv", LINC["gtf"], LINC["tsv"], NEEDS_FETCH,
-           src("mechanism")
+           "chromatin.loci.tsv", "nmd.loci.tsv", "peptide_features.orfs.tsv", "support.orfs.tsv", LINC["gtf"],
+           LINC["tsv"], NEEDS_FETCH, src("mechanism")
     output: "mechanism.orfs.tsv", "coexpression.loci.tsv"
     resources: mem_mb=mem(48), runtime=120
     log: "logs/mechanism.log"

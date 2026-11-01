@@ -29,7 +29,7 @@ COLUMNS = [
     ("Summary scores", "crispr_screen_value", "CRISPR screen", "num",
      "2 = ORF-specific viability phenotype (Prensner 2021), 1 = phenotype (unresolved or Chen 2020 hit), 0 = none"),
     ("Summary scores", "dominant_class", "Dominant class", "text",
-     "mechanism class whose share exceeds the next by >= 0.05, else none"),
+     "mechanism class with the highest standardized score, above average and >= 0.5 SD ahead of the next, else none"),
     ("Summary scores", "hcc_direction", "HCC direction", "text", "from D1 HCC, D2, D3 (informative: percentile >= 0.75)"),
     ("Summary scores", "chronic_direction", "Chronic direction", "text", "up / down with chronic liver disease (D1 chronic)"),
 
@@ -48,7 +48,7 @@ COLUMNS = [
     *[("Mechanism classes", f"M{i}_score", f"M{i}", "score", d) for i, d in enumerate([
         "encoded peptide", "translation-coupled RNA regulation", "cis-regulation of a neighbour",
         "trans-acting RNA, nuclear", "trans-acting RNA, cytoplasmic", "small-RNA host"], 1)],
-    *[("Mechanism shares", f"M{i}_share", f"M{i} share", "score", f"M{i} score / sum of the six class scores")
+    *[("Mechanism z", f"M{i}_z", f"M{i} z", "num", f"M{i} score in SD from the mean over all ORFs")
       for i in range(1, 7)],
 
     ("D1 HCC detail", "log2FC_paired", "log2FC T/N", "num", "mean log2 fold change, tumour vs adjacent normal (50 pairs)"),
@@ -127,6 +127,7 @@ COLUMNS = [
         ("m1_sequence_features", "M1 sequence", "TM / signal-like / Pfam, and order"),
         ("m1_crispr_screen", "M1 CRISPR", "screen value"),
         ("m2_nmd", "M2 NMD", "stop > 50 nt upstream of the last exon junction"),
+        ("m2_nmd_sensitivity", "M2 NMD sensitivity", "log2FC upon UPF1 or SMG6 + SMG7 knock-down (HeLa)"),
         ("m2_other_translated_orfs", "M2 other ORFs", "other translated ORFs on the locus"),
         ("m3_neighbour_position", "M3 position", "divergent or antisense to a protein-coding gene"),
         ("m3_coexpression", "M3 co-expression", "excess co-expression with the nearest coding gene"),
@@ -185,16 +186,17 @@ INDEX = [
     ("Mechanism classes (per ORF)", [
         ("M1", "Encoded peptide: translation strength, peptides, conservation (copy-weighted), length, sequence "
                "features, CRISPR screens."),
-        ("M2", "Translation-coupled RNA regulation: NMD substrate, other translated ORFs on the locus."),
+        ("M2", "Translation-coupled RNA regulation: NMD substrate, measured NMD sensitivity, other translated ORFs "
+               "on the locus."),
         ("M3", "Cis-regulation of a neighbour: divergent/antisense position, excess co-expression with the nearest "
                "coding gene, nuclear enrichment, enhancer-like chromatin, low polysome association."),
         ("M4", "Trans-acting nuclear RNA: nuclear enrichment, abundance, binding by nuclear RBPs, no cis signature."),
-        ("M5", "Trans-acting cytoplasmic RNA: cytoplasmic enrichment, binding by cytoplasmic RBPs, ribosome "
-               "association without one dominant ORF."),
+        ("M5", "Trans-acting cytoplasmic RNA: cytoplasmic enrichment, binding by cytoplasmic RBPs."),
         ("M6", "Small-RNA host: snoRNA, scaRNA or miRNA genes in the locus."),
-        ("Scores and shares", "Class score = mean of its feature percentiles (absolute evidence; classes are not "
-                              "exclusive). Share = score / sum of the six scores. Dominant class: share ahead of the "
-                              "next by >= 0.05."),
+        ("Scores and dominance", "Class score = mean of its feature percentiles (absolute evidence; classes are "
+                                 "not exclusive). z = class score in SD from its mean over all ORFs, so classes with "
+                                 "few features do not win by their wider spread. Dominant class: highest z, above 0 "
+                                 "and >= 0.5 ahead of the next."),
     ]),
 ]
 
@@ -337,7 +339,7 @@ percentiles against the background (0.5 = typical lincRNA) and are shaded by val
 const META = __META__;
 const DATA = __DATA__;
 const groups = [...new Set(META.map(m => m.group))];
-const hidden = new Set(["Mechanism shares", "Mechanism features (percentiles)", "QC detail", "Identifiers"]);
+const hidden = new Set(["Mechanism z", "Mechanism features (percentiles)", "QC detail", "Identifiers"]);
 let sortCol = META.findIndex(m => m.col === "hcc_score"), sortDir = -1, setFilter = "all", query = "";
 const setIdx = META.findIndex(m => m.col === "set");
 

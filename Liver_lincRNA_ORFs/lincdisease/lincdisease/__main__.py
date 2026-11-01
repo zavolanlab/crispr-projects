@@ -10,6 +10,7 @@ Command-line driver of lincdisease; one sub-command per step of LOGIC.md, each w
   python -m lincdisease manifest --out-dir O [--gtex-per-tissue 10]
   python -m lincdisease quant    --out-dir O --project LIHC [--worker 0 --n-workers 4] [--scratch S]
   python -m lincdisease chronic  --out-dir O --manifest; then quant --sample-set quant_sra; then chronic --out-dir O --data-dir D
+  python -m lincdisease nmd      --out-dir O --manifest; then quant --sample-set quant_nmd; then nmd --out-dir O --data-dir D
   python -m lincdisease literature --results-dir R --candidates T --data-dir D --out-dir O
   python -m lincdisease genetics --results-dir R --candidates T --data-dir D --out-dir O
   python -m lincdisease somatic  --results-dir R --candidates T --data-dir D --out-dir O
@@ -32,7 +33,7 @@ import glob
 import json
 
 from . import (chromatin, chronic, controls, disease, eclip, encode, eqtl, genetics, homology, inputs, integrate,
-               hla, literature, mechanism, peptide, qc, quant, report, resources, screens, somatic, weights)
+               hla, literature, mechanism, nmd, peptide, qc, quant, report, resources, screens, somatic, weights)
 from . import scoring, table_html
 
 
@@ -231,6 +232,31 @@ def cmd_chronic(args):
           f"parent-driven: {res['parent_driven'].sum()}")
 
 
+def cmd_nmd(args):
+    """M2 NMD sensitivity from the HeLa NMD knock-downs (quant_nmd/): manifest (needs network) or statistics."""
+    d = os.path.join(args.out_dir, "quant_nmd")
+    if args.manifest:
+        os.makedirs(d, exist_ok=True)
+        nmd.manifest().to_csv(os.path.join(d, "samples.tsv"), sep="\t", index=False)
+        return
+    sums = read_sums(d)
+    feats = pd.read_csv(os.path.join(args.out_dir, "quant", "features.tsv"), sep="\t", index_col=0)
+    samples = pd.read_csv(os.path.join(d, "samples.tsv"), sep="\t")
+    samples = samples[samples["sample_id"].isin(sums["sample_id"])]
+    ncov = quant.normalize(sums, feats, samples)
+    genes = quant.read_gene_sums(resources.fetch(f"sra_{nmd.PROJECT}_genes", args.data_dir,
+                                                 url=quant.gene_sums_url("sra", nmd.PROJECT)), "sra", samples)
+    gtf = quant.read_gtf_exons(resources.fetch("gencode_gtf", args.data_dir)).drop_duplicates("gene_id")
+    pc = gtf.loc[gtf["gene_type"] == "protein_coding", "gene_id"].str.split(".").str[0]
+    res = nmd.sensitivity(ncov, samples, genes[genes.index.isin(pc)], pseudocount=args.pseudocount)
+    unq = ~feats["quantifiable"].reindex(res.index).fillna(False).astype(bool)
+    res.loc[unq, ["log2fc_UPF1_kd", "log2fc_SMG6_SMG7_kd", "nmd_log2fc", "nmd_p", "nmd_fdr"]] = float("nan")
+    path = os.path.join(args.out_dir, "nmd.loci.tsv")
+    res.to_csv(path, sep="\t", index_label="feature_id")
+    print(f"wrote {path}; tested {res['nmd_log2fc'].notna().sum()}, up at FDR < 0.05: "
+          f"{((res['nmd_fdr'] < 0.05) & (res['nmd_log2fc'] > 0)).sum()}")
+
+
 def cmd_literature(args):
     names = feature_names(args.results_dir, args.candidates)
     aliases = literature.hgnc_aliases(resources.fetch("hgnc", args.data_dir))
@@ -324,6 +350,7 @@ def cmd_fetch(args):
     for p in chronic.COHORTS.values():
         resources.fetch(f"sra_{p}_genes", args.data_dir, url=quant.gene_sums_url("sra", p))
         resources.fetch(f"sra_{p}_qc", args.data_dir, url=quant._metadata_url("sra", p, "recount_qc"))
+    resources.fetch(f"sra_{nmd.PROJECT}_genes", args.data_dir, url=quant.gene_sums_url("sra", nmd.PROJECT))
     fetch_encode(args.data_dir)
     missing = resources.missing_manual(args.data_dir)
     for path, source in missing:
@@ -403,7 +430,8 @@ def cmd_mechanism(args):
                                peptide_feats=pd.read_csv(os.path.join(args.out_dir, "peptide_features.orfs.tsv"),
                                                          sep="\t", index_col=0),
                                orf_support=pd.read_csv(os.path.join(args.out_dir, "support.orfs.tsv"), sep="\t",
-                                                       index_col=0))
+                                                       index_col=0),
+                               nmd=pd.read_csv(os.path.join(args.out_dir, "nmd.loci.tsv"), sep="\t", index_col=0))
     res = mechanism.class_table(feats, pd.Series(True, index=orfs.index))
     out = pd.concat([orfs[["orf_id", "orf_label", "locus_id", "locus_name", "is_candidate"]],
                      feats.add_prefix("raw_"), res], axis=1)
@@ -602,6 +630,12 @@ def main():
     ch.add_argument("--pseudocount", type=float, default=0.05)
     ch.add_argument("--data-dir", help="download cache (recount3 gene sums and QC, GENCODE); not needed with --manifest")
     ch.set_defaults(func=cmd_chronic)
+
+    nm = sub.add_parser("nmd", help="Step 4, M2: NMD sensitivity from HeLa NMD knock-downs (quant_nmd/)")
+    nm.add_argument("--manifest", action="store_true", help="write quant_nmd/samples.tsv (needs network)")
+    nm.add_argument("--pseudocount", type=float, default=0.05)
+    nm.add_argument("--data-dir", help="download cache (recount3 gene sums, GENCODE); not needed with --manifest")
+    nm.set_defaults(func=cmd_nmd)
 
     lt = sub.add_parser("literature", help="Step 3, D5: Europe PMC counts")
     _common(lt)

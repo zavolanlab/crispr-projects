@@ -312,15 +312,17 @@ C.push(p("**Confidence tier**: `likely_artefact` = duplicated or homologous with
 C.push(h1("7. Mechanism classes M1-M6 (per ORF)"));
 C.push(p("Each feature is converted to a percentile among all 11,910 ORFs (locus features copied to every ORF of " +
   "the locus). The **class score** is the equal-weight composite (Equation 2) of its feature percentiles, so " +
-  "missing features count 0.5; the **share** is the class score divided by the sum of the six class scores; " +
-  "the **dominant class** is the class with the largest share if it exceeds the second by ≥ 0.05, else none. " +
-  "Classes are not mutually exclusive: the scores are absolute evidence, the shares relative."));
+  "missing features count 0.5. Classes with few or binary features have a wider score distribution, so classes " +
+  "are compared on **standardized scores**, *z*_{k} = (*S*_{k} − mean_{k}) / sd_{k}, with mean and standard " +
+  "deviation of class *k* over all ORFs. The **dominant class** is the class with the largest *z* if *z* > 0 and " +
+  "it exceeds the second largest by ≥ 0.5, else none. Classes are not mutually exclusive: the scores are " +
+  "absolute evidence, the *z* relative to the other ORFs."));
 C.push(p("Conservation features are weighted by the copy-attribution confidence *a*, so that conservation counts " +
   "only as far as the alignment can be attributed to this copy:"));
 C.push(eq(Sub(R("p"), R("w")), R(" = 0.5 + ("), Sub(R("p"), R("cons")), R(" − 0.5) · a")));
 C.push(table(["Class", "Features (each one percentile)"], [
   ["M1 Encoded peptide", "translation strength (pooled log10 Bayes factor, lincorfz); fraction of the transcript's P-sites in the ORF; identified peptides (proteomics peptides absent from canonical proteins + lincORF-specific immunopeptides); independent translation (same stop as a GENCODE Ribo-seq ORF, +1 with phase 1 peptide support); PhyloCSF, *a*-weighted; ORF − non-ORF exon PhyloP100way mean over quantifiable positions (≥ 30 positions each), *a*-weighted; length (aa); sequence features = 0.5 · [TM segment, signal-like N-terminus or Pfam-A domain] + 0.5 · (1 − disordered fraction, metapredict); CRISPR screen value (Section 8)"],
-  ["M2 Translation-coupled RNA regulation", "NMD substrate (stop > 50 nt upstream of the last exon junction); number of other translated ORFs on the locus"],
+  ["M2 Translation-coupled RNA regulation", "NMD substrate (stop > 50 nt upstream of the last exon junction); NMD sensitivity (below); number of other translated ORFs on the locus"],
   ["M3 Cis-regulation of a neighbour", "divergent (TSSs ≤ 5 kb, head-to-head) or antisense position to a protein-coding gene; co-expression excess with the nearest protein-coding gene (≤ 100 kb): Spearman ρ over TCGA-LIHC + GTEx liver minus the median ρ of nearest protein-coding pairs in the same distance bin (0-5, 5-20, 20-50, 50-100 kb); nuclear enrichment; enhancer-like TSS chromatin, log2((H3K4me1 + 1)/(H3K4me3 + 1)) at active TSSs (H3K27ac ≥ 2-fold; inactive lowest); low polysome association (−MRL percentile)"],
   ["M4 Trans-acting RNA, nuclear", "nuclear enrichment; copy number (log2 TPM HepG2); eCLIP enrichment of nuclear RBPs; no cis signature (1 − neighbour position)"],
   ["M5 Trans-acting RNA, cytoplasmic", "cytoplasmic enrichment (−nuclear); eCLIP enrichment of cytoplasmic RBPs; informative only where HepG2 fractionation or eCLIP data exist (otherwise 0.5, coverage 0)"],
@@ -335,6 +337,16 @@ C.push(p("**ENCODE HepG2 features** use stranded data, measured on the exons of 
   "with share *f*_{G} of the 105 RBPs, *n*_{G} bound RBPs of the group and *n* bound RBPs in total:"));
 C.push(eq(Sub(R("E"), R("G")), R(" = "), Sub(R("log"), R("2")), Sq(F(F([Sub(R("n"), R("G")), R(" + "), Sub(R("f"), R("G"))], R("n + 1")), Sub(R("f"), R("G")))), R(",   missing if n = 0")));
 C.push(p("an over-representation of the group among the bound RBPs that does not grow with expression or length."));
+C.push(p("**NMD sensitivity** is measured in the HeLa knock-downs of Colombo et al. 2017 (recount3 SRP083135): " +
+  "6 scrambled-shRNA controls, UPF1 knock-down and SMG6 + SMG7 double knock-down (3 replicates each). Loci are " +
+  "quantified as in Section 3, and *ncov* is divided by median-of-ratios size factors of the protein-coding gene " +
+  "sums (Equation 8). With *ē*_{c} the mean of log2(*ncov*/*s* + 0.05) over the samples of condition *c*:"));
+C.push(eq(R("NMD = "), F([Par([Sub(R("ē"), R("UPF1")), R(" − "), Sub(R("ē"), R("ctrl"))]), R(" + "),
+  Par([Sub(R("ē"), R("SMG6+7")), R(" − "), Sub(R("ē"), R("ctrl"))])], R("2"))));
+C.push(p("(> 0: up when NMD is inhibited), with a Welch t-test of the six knock-down against the six control " +
+  "samples (BH-FDR); missing for loci detected in < 50% of the samples. Known NMD targets rise as expected " +
+  "(ATF4 +1.4, GADD45B +2.0, GAS5 +1.3, ZFAS1 +2.0 log2), and loci with a predicted NMD-substrate ORF rise more " +
+  "than the others (median +0.41 vs −0.60, Mann-Whitney p = 2 × 10⁻⁸⁶)."));
 
 // 8
 C.push(h1("8. CRISPR screen evidence"));
@@ -385,6 +397,7 @@ C.push(table(["Resource", "Use"], [
   ["GWAS Catalog; GTEx v8 liver eQTLs", "D4"],
   ["Europe PMC REST API; HGNC", "D5"],
   ["ENCODE HepG2 (CeFra-seq, eCLIP, histone ChIP-seq); Van Nostrand et al. 2020", "M3-M5 features"],
+  ["Colombo et al. 2017 HeLa NMD knock-downs (GSE86148, recount3 SRP083135)", "M2 NMD sensitivity"],
   ["UCSC genomicSuperDups, wgRna, PhyloP100way, hg19→hg38 chain; GIAB GRCh38 false duplications", "QC, M1, M6"],
   ["UniProt human reference proteome; Pfam-A; GENCODE Ribo-seq ORFs", "homology, M1"],
   ["Prensner et al. 2021; Chen et al. 2020 supplementary tables", "CRISPR screens"],

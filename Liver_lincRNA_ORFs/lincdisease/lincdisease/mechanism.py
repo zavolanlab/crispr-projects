@@ -1,14 +1,15 @@
 """
 Mechanism classes (LOGIC.md, Step 4): per-ORF features (with locus-level features copied to the locus' ORFs),
-percentiles against all ORFs of the run, class scores, relative shares and dominant class.
+percentiles against all ORFs of the run, class scores, standardized class scores and dominant class.
 
 Features computed here (higher = more support for the class; '-' marks features ranked on the negated value):
   M1  translation (pooled log10 Bayes factor), fraction of the transcript's P-sites in the ORF, specific
       peptides (proteomics peptides absent from canonical proteins + lincORF-specific HLA-I peptides),
       PhyloCSF and ORF vs non-ORF exon PhyloP contrast, both weighted by copy-attribution confidence, ORF
       length, hits of published CRISPR screens (screens.py)
-  M2  NMD substrate (stop codon > 50 nt upstream of the last exon junction), number of other translated ORFs
-      (evidence moderate/strong) on the locus
+  M2  NMD substrate (stop codon > 50 nt upstream of the last exon junction), NMD sensitivity (up-regulation upon
+      UPF1 or SMG6 + SMG7 knock-down in HeLa, nmd.py), number of other translated ORFs (evidence moderate/strong)
+      on the locus
   M3  divergent / antisense position next to a protein-coding gene, low polysome association (-MRL percentile),
       co-expression with the nearest protein-coding gene (TSS distance <= 100 kb) across TCGA-LIHC and GTEx
       liver: Spearman rho minus the median rho of protein-coding gene pairs in the same TSS-distance bin
@@ -27,13 +28,13 @@ from . import quant, scoring
 CLASSES = {
     "M1": ["m1_translation", "m1_orf_share", "m1_peptides", "m1_independent_translation", "m1_phylocsf_weighted",
            "m1_length", "m1_phylop_contrast_weighted", "m1_sequence_features", "m1_crispr_screen"],
-    "M2": ["m2_nmd", "m2_other_translated_orfs"],
+    "M2": ["m2_nmd", "m2_nmd_sensitivity", "m2_other_translated_orfs"],
     "M3": ["m3_neighbour_position", "m3_low_polysome", "m3_coexpression", "m3_nuclear", "m3_enhancer_chromatin"],
     "M4": ["m4_copy_number", "m4_no_cis", "m4_nuclear", "m4_eclip_nuclear"],
     "M5": ["m5_cytoplasmic", "m5_eclip_cytoplasmic"],
     "M6": ["m6_small_rna_host"],
 }
-DOMINANCE_MARGIN = 0.05
+DOMINANCE_MARGIN = 0.5   # SD of the standardized class scores
 DIVERGENT_DISTANCE = 5000
 NEIGHBOUR_MAX_DISTANCE = 100_000
 DISTANCE_BINS = (0, 5_000, 20_000, 50_000, 100_000)
@@ -212,10 +213,11 @@ def small_rna_hosts(loci_tx, small_rnas):
 # ---------------------------------------------------------------- features and scores
 
 def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=None, encode=None, eclip=None,
-             chromatin=None, peptide_feats=None, orf_support=None):
+             chromatin=None, peptide_feats=None, orf_support=None, nmd=None):
     """
     Raw feature values per ORF (index of `orfs`). `coexpr`: locus -> co-expression excess (coexpression);
-    `encode`, `eclip`, `chromatin`: locus tables of encode.features, eclip.features, chromatin.features;
+    `encode`, `eclip`, `chromatin`, `nmd`: locus tables of encode.features, eclip.features, chromatin.features,
+    nmd.sensitivity;
     `peptide_feats`, `orf_support`: ORF tables (index orf_id) of the `peptide` and `support` steps.
     """
     f = pd.DataFrame(index=orfs.index)
@@ -247,6 +249,7 @@ def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=No
     f["m3_enhancer_chromatin"] = locus(chromatin, "enhancer_score")
     f["m4_eclip_nuclear"] = locus(eclip, "eclip_nuclear_enrichment")
     f["m5_eclip_cytoplasmic"] = locus(eclip, "eclip_cytoplasmic_enrichment")
+    f["m2_nmd_sensitivity"] = locus(nmd, "nmd_log2fc")
     if peptide_feats is not None:
         pf = peptide_feats.reindex(orfs["orf_id"])
         col = lambda c: pf[c].astype(float).to_numpy()
@@ -261,7 +264,7 @@ def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=No
 
 
 def class_table(feats, is_background, margin=DOMINANCE_MARGIN):
-    """Percentiles, class scores, coverage, relative shares and dominant class."""
+    """Percentiles, class scores, coverage, standardized class scores (_z) and dominant class."""
     conservation = [c for c in ("m1_phylocsf", "m1_phylop_contrast") if c in feats.columns]
     cols = [c for c in feats.columns if c != "copy_attribution" and c not in conservation]
     pct = scoring.component_percentiles(feats, feats[is_background], cols)
@@ -270,8 +273,8 @@ def class_table(feats, is_background, margin=DOMINANCE_MARGIN):
         p_cons = scoring.percentile_vs_background(feats[c], feats.loc[is_background, c])
         pct[f"{c}_weighted"] = 0.5 + (p_cons - 0.5) * feats["copy_attribution"].to_numpy()
     scores, coverage = scoring.class_scores(pct, CLASSES)
-    shares = scoring.relative_shares(scores)
+    z = scoring.standardized(scores, np.asarray(is_background, dtype=bool))
     out = pd.concat([pct.add_prefix("pct_"), scores.add_suffix("_score"), coverage.add_suffix("_coverage"),
-                     shares.add_suffix("_share")], axis=1)
-    out["dominant_class"] = scoring.dominant_class(shares, margin)
+                     z.add_suffix("_z")], axis=1)
+    out["dominant_class"] = scoring.dominant_class(z, margin)
     return out

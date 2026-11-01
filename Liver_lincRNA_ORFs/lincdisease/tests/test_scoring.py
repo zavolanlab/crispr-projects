@@ -38,16 +38,17 @@ def test_composite_rejects_bad_weights():
         scoring.composite(pd.DataFrame({"a": [0.1]}), {"a": -1})
 
 
-def test_class_scores_shares_and_dominance():
+def test_class_scores_standardized_and_dominance():
     feats = pd.DataFrame({"f1": [0.9, 0.5], "f2": [0.9, 0.5], "g1": [0.3, 0.55]})
     scores, cov = scoring.class_scores(feats, {"A": ["f1", "f2"], "B": ["g1", "missing"]})
     assert scores.loc[0, "A"] == pytest.approx(0.9)
     assert scores.loc[0, "B"] == pytest.approx(0.4)      # missing feature -> 0.5
     assert cov.loc[0, "B"] == pytest.approx(0.5)
-    shares = scoring.relative_shares(scores)
-    assert shares.sum(axis=1).tolist() == pytest.approx([1.0, 1.0])
-    dom = scoring.dominant_class(shares, margin=0.1)
-    assert dom.tolist() == ["A", "none"]
+    z = scoring.standardized(scores, np.array([True, True]))
+    assert z.mean().tolist() == pytest.approx([0.0, 0.0])
+    z = pd.DataFrame({"A": [2.0, 0.6, -0.5], "B": [0.5, 0.3, -1.0]})
+    # ahead by 1.5 SD; ahead by only 0.3; ahead by 0.5 but below the mean
+    assert scoring.dominant_class(z, margin=0.5).tolist() == ["A", "none", "none"]
 
 
 def test_consensus_direction():

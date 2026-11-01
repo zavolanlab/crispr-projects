@@ -2,7 +2,7 @@
 Final tables (LOGIC.md, "Outputs") and the control panel check (Step 5).
 
 Per ORF: QC flags and tier, copy-attribution confidence, the locus' disease components and score, the
-actionability score, mechanism class scores, shares and dominant class.
+actionability score, mechanism class scores, standardized class scores and dominant class.
 Actionability (per ORF) = equal-weight composite of the percentiles (among all ORFs) of the locus' tumour
 specificity, the number of lincORF-specific HLA-I peptides and predicted HLA-I binding (missing until MHCflurry
 presentation (MHCflurry, distinct binder peptides over the HepG2, Huh7 and common alleles).
@@ -43,7 +43,7 @@ def orf_table(orfs, qc_table, disease_loci, mech, act):
     keep_disease += [c for c in ("disease_score_fitted",) if c in disease_loci]
     dl = disease_loci[keep_disease].reindex(orfs["locus_id"])
     dl.index = orfs.index
-    mcols = [c for c in mech.columns if c.endswith(("_score", "_share", "_coverage")) or c == "dominant_class"]
+    mcols = [c for c in mech.columns if c.endswith(("_score", "_z", "_coverage")) or c == "dominant_class"]
     qcols = ["confidence_tier", "copy_attribution", "segdup_fracMatch", "grch38_false_dup", "antisense_to_coding",
              "small_RNA_overlap", "multimapper_dominated", "coding_gene_extension", "tcga_quantifiable"]
     base = orfs[["orf_id", "orf_label", "locus_id", "locus_name", "is_candidate", "ribo_evidence", "n_aa",
