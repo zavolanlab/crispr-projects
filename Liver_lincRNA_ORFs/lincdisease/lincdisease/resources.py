@@ -48,6 +48,8 @@ UNIPROT_HUMAN = ("https://ftp.uniprot.org/pub/databases/uniprot/current_release/
                  "Eukaryota/UP000005640/")
 PRENSNER = "Prensner et al. 2021 (Nat Biotechnol), PMC supplement NIHMS1698134"
 MANUAL = {
+    # genome for the STAR index of the Govaere 2020 alignments (workflow/rules/govaere.smk)
+    "homology/GRCh38.primary_assembly.genome.fa.gz": GENCODE42 + "GRCh38.primary_assembly.genome.fa.gz",
     "homology/gencode.v42.pc_translations.fa.gz": GENCODE42 + "gencode.v42.pc_translations.fa.gz",
     "homology/UP000005640_9606.fasta.gz": UNIPROT_HUMAN + "UP000005640_9606.fasta.gz",
     "homology/UP000005640_9606_additional.fasta.gz": UNIPROT_HUMAN + "UP000005640_9606_additional.fasta.gz",

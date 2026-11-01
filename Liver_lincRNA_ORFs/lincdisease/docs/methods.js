@@ -382,7 +382,7 @@ C.push(gap());
 // 10
 C.push(h1("10. Data and software"));
 C.push(table(["Resource", "Use"], [
-  ["GENCODE v42 (GRCh38)", "annotation, protein-coding translations and transcripts, genome"],
+  ["GENCODE v42 (GRCh38)", "annotation, protein-coding translations"],
   ["recount3 (TCGA-LIHC, GTEx, SRA SRP197353, SRP186450, SRP078450)", "base-level coverage, gene sums, QC metadata"],
   ["TCGA-CDR (Liu et al. 2018); ABSOLUTE purity (PanCanAtlas)", "survival endpoints; tumour purity"],
   ["UCSC Xena GDC hub", "TCGA-LIHC masked copy number, 450K methylation, probe map"],
