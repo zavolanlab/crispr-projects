@@ -139,7 +139,6 @@ COLUMNS = [
         ("m4_eclip_nuclear", "M4 eCLIP nuclear", "binding by nuclear RBPs"),
         ("m5_cytoplasmic", "M5 cytoplasmic", "HepG2 cytoplasmic enrichment"),
         ("m5_eclip_cytoplasmic", "M5 eCLIP cytoplasmic", "binding by cytoplasmic RBPs"),
-        ("m5_ribosome_no_dominant_orf", "M5 ribosomes, no dominant ORF", "MRL x (1 - largest ORF share)"),
         ("m6_small_rna_host", "M6 small RNAs", "snoRNA / scaRNA / miRNA genes hosted"),
     ]],
 

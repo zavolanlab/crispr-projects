@@ -9,9 +9,8 @@ regions or with homology to annotated proteins (other ORFs get 1). It is the mea
                peptides is not evidence against the copy)
   age          (identity_max - identity) / (identity_max - identity_min), clipped to 0..1: very recent copies
                (identity >= identity_max) leave the multi-species alignment with the parent's orthologs
-Ka/Ks against the parent is reported (homology.py) but not used: on the run it did not agree with independent
-translation evidence, and for recent copies a low Ka/Ks mostly reflects selection on the parent before the
-duplication. Reads on paralog-discriminating positions map uniquely, so they are covered by `expression`.
+Ka/Ks against the parent is not computed (LOGIC.md). Reads on paralog-discriminating positions map uniquely, so
+they are covered by `expression`.
 """
 import numpy as np
 import pandas as pd

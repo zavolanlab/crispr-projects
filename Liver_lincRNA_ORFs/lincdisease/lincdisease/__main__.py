@@ -68,7 +68,6 @@ def cmd_qc(args):
     if os.path.exists(hpath):
         h = hom.set_index("orf_id").reindex(orfs["orf_id"])
         res["homolog_parent_coverage"] = h["parent_coverage"].to_numpy()
-        res["homolog_kaks"] = h["kaks"].to_numpy()
     out = pd.concat([orfs[["orf_id", "orf_label", "locus_id", "locus_name", "is_candidate"]],
                      res.drop(columns="orf_id")], axis=1)
     path = os.path.join(args.out_dir, "qc.orfs.tsv")
@@ -85,7 +84,7 @@ def cmd_homology(args):
                        threads=args.threads)
     path = os.path.join(args.out_dir, "homology.orfs.tsv")
     res.to_csv(path, sep="\t")
-    print(f"wrote {path}: with homolog {res['parent'].notna().sum()}, with Ka/Ks {res['kaks'].notna().sum()}")
+    print(f"wrote {path}: with homolog {res['parent'].notna().sum()}")
 
 
 def cmd_peptide(args):
@@ -553,7 +552,7 @@ def main():
                    help="directory with proteomics/ and peptidomics/ results of the lincorfz notebook")
     q.set_defaults(func=cmd_qc)
 
-    hm = sub.add_parser("homology", help="Step 1: DIAMOND homology to annotated proteins, Ka/Ks vs the parent")
+    hm = sub.add_parser("homology", help="Step 1: DIAMOND homology to annotated proteins")
     _common(hm)
     hm.add_argument("--diamond", default="diamond")
     hm.add_argument("--threads", type=int, default=4)

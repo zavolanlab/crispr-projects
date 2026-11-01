@@ -13,9 +13,9 @@ Features computed here (higher = more support for the class; '-' marks features 
       co-expression with the nearest protein-coding gene (TSS distance <= 100 kb) across TCGA-LIHC and GTEx
       liver: Spearman rho minus the median rho of protein-coding gene pairs in the same TSS-distance bin
   M4  copy number (log2 TPM HepG2), no cis position (1 - M3 position)
-  M5  ribosome association without one dominant ORF (MRL percentile x (1 - largest ORF share of the locus))
   M6  snoRNA / scaRNA / miRNA genes (GENCODE + UCSC wgRna) inside the locus span on the same strand
-ENCODE HepG2 features (encode.py): nuclear enrichment (M3, M4) and its negative (M5). UPF1 knock-down (M2),
+ENCODE HepG2 features (encode.py): nuclear enrichment (M3, M4) and its negative (M5), eCLIP by nuclear (M4) and
+cytoplasmic (M5) RBPs; M5 has no other features. UPF1 knock-down (M2),
 eCLIP, chromatin at the TSS, sequence features (TM, signal peptide, Pfam, disorder), PhyloP contrast and CRISPR
 screens enter as missing when their step has not been run; scoring.composite shrinks them to 0.5.
 """
@@ -30,7 +30,7 @@ CLASSES = {
     "M2": ["m2_nmd", "m2_other_translated_orfs", "m2_upf1_kd"],
     "M3": ["m3_neighbour_position", "m3_low_polysome", "m3_coexpression", "m3_nuclear", "m3_enhancer_chromatin"],
     "M4": ["m4_copy_number", "m4_no_cis", "m4_nuclear", "m4_eclip_nuclear"],
-    "M5": ["m5_ribosome_no_dominant_orf", "m5_cytoplasmic", "m5_eclip_cytoplasmic"],
+    "M5": ["m5_cytoplasmic", "m5_eclip_cytoplasmic"],
     "M6": ["m6_small_rna_host"],
 }
 DOMINANCE_MARGIN = 0.05
@@ -241,8 +241,6 @@ def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=No
     f["m4_copy_number"] = num("log2TPM_HepG2")
     f["m4_no_cis"] = 1.0 - f["m3_neighbour_position"]
     f["m4_nuclear"] = nuclear
-    max_share = f["m1_orf_share"].groupby(orfs["locus_id"]).transform("max")
-    f["m5_ribosome_no_dominant_orf"] = num("MRL_pct_vs_mRNA") * (1.0 - max_share)
     f["m5_cytoplasmic"] = -nuclear
     f["m6_small_rna_host"] = orfs["locus_id"].map(small_rna).to_numpy()
     locus = lambda table, col: (orfs["locus_id"].map(table[col]).astype(float).to_numpy() if table is not None

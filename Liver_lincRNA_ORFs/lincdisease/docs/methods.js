@@ -302,11 +302,11 @@ C.push(bullet("expression: fraction of the ORF's P-sites from uniquely mapped re
 C.push(bullet("peptides: 1 if an identified peptide (proteomics or immunopeptidomics) maps to this ORF only; missing otherwise, as absence of peptides is no evidence against the copy;"));
 C.push(bullet("duplication age: clip((0.98 − identity)/0.08, 0, 1), identity = `fracMatch`, else protein identity to the homolog; old duplications make the conservation alignment more likely to hold orthologs of this copy."));
 C.push(p("The first two parts are evidence that the copy itself is translated; the age only says how far the " +
-  "conservation alignment belongs to the copy. Ka/Ks against the CDS of the best GENCODE hit (Nei-Gojobori, " +
-  "Jukes-Cantor corrected, on the codon alignment implied by the protein alignment; missing with < 20 aligned " +
-  "codons, dS = 0 or saturation) is reported but not used: it was uncorrelated with independent translation " +
-  "evidence (same stop codon as a GENCODE Ribo-seq ORF; Spearman ρ = −0.01, n = 1,757), and for recent copies a " +
-  "low Ka/Ks mostly reflects selection on the parent before the duplication."));
+  "conservation alignment belongs to the copy. Selection on the copy (Ka/Ks against the parent) is not used: " +
+  "for recent copies dS is near 0 and a low Ka/Ks mostly reflects selection on the parent before the " +
+  "duplication, while old copies are already attributed by unique mapping; in a test on this run (Nei-Gojobori, " +
+  "n = 1,757) it was uncorrelated with independent translation evidence (same stop codon as a GENCODE Ribo-seq " +
+  "ORF; Spearman ρ = −0.01)."));
 C.push(p("**Confidence tier**: `likely_artefact` = duplicated or homologous with < 50% unique P-sites (or " +
   "multimapper-dominated), and no copy-specific peptide; `expressed_paralog` = " +
   "duplicated or homologous otherwise; `caution` = any lincorfz flag or not quantifiable; `clean` = none. Flags " +
@@ -327,7 +327,7 @@ C.push(table(["Class", "Features (each one percentile)"], [
   ["M2 Translation-coupled RNA regulation", "NMD substrate (stop > 50 nt upstream of the last exon junction); number of other translated ORFs on the locus; upregulation upon NMD inhibition (missing: the ENCODE HepG2 UPF1 knock-down does not inhibit NMD)"],
   ["M3 Cis-regulation of a neighbour", "divergent (TSSs ≤ 5 kb, head-to-head) or antisense position to a protein-coding gene; co-expression excess with the nearest protein-coding gene (≤ 100 kb): Spearman ρ over TCGA-LIHC + GTEx liver minus the median ρ of nearest protein-coding pairs in the same distance bin (0-5, 5-20, 20-50, 50-100 kb); nuclear enrichment; enhancer-like TSS chromatin, log2((H3K4me1 + 1)/(H3K4me3 + 1)) at active TSSs (H3K27ac ≥ 2-fold; inactive lowest); low polysome association (−MRL percentile)"],
   ["M4 Trans-acting RNA, nuclear", "nuclear enrichment; copy number (log2 TPM HepG2); eCLIP enrichment of nuclear RBPs; no cis signature (1 − neighbour position)"],
-  ["M5 Trans-acting RNA, cytoplasmic", "cytoplasmic enrichment (−nuclear); eCLIP enrichment of cytoplasmic RBPs; ribosome association without a dominant ORF, MRL percentile × (1 − largest ORF P-site share on the locus). miRNA-site density is not used: HepG2 expresses little miR-122, and titrating a miRNA takes far more sites than low-copy lincRNAs provide (Denzler et al. 2014)"],
+  ["M5 Trans-acting RNA, cytoplasmic", "cytoplasmic enrichment (−nuclear); eCLIP enrichment of cytoplasmic RBPs; informative only where HepG2 fractionation or eCLIP data exist (otherwise 0.5, coverage 0). Ribosome association without a dominant ORF is not used (anticorrelated with cytoplasmic enrichment, ρ = −0.43). miRNA-site density is not used: HepG2 expresses little miR-122, and titrating a miRNA takes far more sites than low-copy lincRNAs provide (Denzler et al. 2014)"],
   ["M6 Small-RNA host", "number of snoRNA, scaRNA or miRNA genes within the locus span on the same strand (GENCODE + UCSC wgRna)"],
 ], [1.4, 5]));
 C.push(gap());
@@ -374,7 +374,7 @@ C.push(table(["Score", "Control", "Expectation", "Result"], [
   ["M2", "GAS5, ZFAS1", "M2 score ≥ 0.6", "pass, pass"],
   ["M3", "HNF1A-AS1, LINC00261", "top class", "pass, fail"],
   ["M4", "MALAT1, NEAT1", "top class", "pass, fail"],
-  ["M5", "NORAD", "top class", "fail"],
+  ["M5", "NORAD", "top class", "pass"],
   ["M6", "SNHG1, MIR22HG", "top class", "pass, pass"],
 ], [1.2, 1.7, 1.9, 2.2]));
 C.push(gap());

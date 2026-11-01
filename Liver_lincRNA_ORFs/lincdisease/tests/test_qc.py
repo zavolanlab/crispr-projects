@@ -49,7 +49,7 @@ def test_copy_attribution():
     assert ca["paralog"] == pytest.approx((0.8 + 0.375) / 2)
     # recent duplication with no unique reads: 0
     assert ca["artefact"] == pytest.approx((0.05 + 0.0) / 2)
-    # Ka/Ks is reported, not part of the confidence or the tier
+    # no selection part (Ka/Ks is not used)
     assert "attr_selection" not in res
 
 
