@@ -297,7 +297,7 @@ def cmd_somatic(args):
 
 
 def fetch_encode(data_dir):
-    """ENCODE HepG2 fractionation / UPF1 knock-down bigWigs, eCLIP IDR peaks and the RBP localisation table,
+    """ENCODE HepG2 fractionation bigWigs, eCLIP IDR peaks and the RBP localisation table,
     histone ChIP-seq bigWigs; returns the eCLIP file table."""
     d = os.path.join(data_dir, "encode")
     for files in encode.BIGWIGS.values():
@@ -345,8 +345,7 @@ def cmd_encode(args):
     res = encode.features(regions, strands, d)
     path = os.path.join(args.out_dir, "encode.loci.tsv")
     res.to_csv(path, sep="\t", index_label="feature_id")
-    print(f"wrote {path}; nuclear ratio for {res['nuclear_log2ratio'].notna().sum()}, "
-          f"UPF1 KD for {res['upf1_kd_log2fc'].notna().sum()} features")
+    print(f"wrote {path}; nuclear ratio for {res['nuclear_log2ratio'].notna().sum()} features")
 
     ed = os.path.join(d, "eclip")
     groups = eclip.rbp_groups(resources.fetch("rbp_localisation", ed, url=eclip.RBP_ANNOTATION))
@@ -619,7 +618,7 @@ def main():
     so.add_argument("--pseudocount", type=float, default=0.05, help="added to ncov before log2")
     so.set_defaults(func=cmd_somatic)
 
-    en = sub.add_parser("encode", help="Step 4: ENCODE HepG2 fractionation, UPF1 knock-down, eCLIP and chromatin")
+    en = sub.add_parser("encode", help="Step 4: ENCODE HepG2 fractionation, eCLIP and chromatin")
     _common(en)
     en.set_defaults(func=cmd_encode)
 

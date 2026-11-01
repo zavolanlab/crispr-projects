@@ -15,8 +15,8 @@ Features computed here (higher = more support for the class; '-' marks features 
   M4  copy number (log2 TPM HepG2), no cis position (1 - M3 position)
   M6  snoRNA / scaRNA / miRNA genes (GENCODE + UCSC wgRna) inside the locus span on the same strand
 ENCODE HepG2 features (encode.py): nuclear enrichment (M3, M4) and its negative (M5), eCLIP by nuclear (M4) and
-cytoplasmic (M5) RBPs; M5 has no other features. UPF1 knock-down (M2),
-eCLIP, chromatin at the TSS, sequence features (TM, signal peptide, Pfam, disorder), PhyloP contrast and CRISPR
+cytoplasmic (M5) RBPs; M5 has no other features. ENCODE features,
+chromatin at the TSS, sequence features (TM, signal peptide, Pfam, disorder), PhyloP contrast and CRISPR
 screens enter as missing when their step has not been run; scoring.composite shrinks them to 0.5.
 """
 import numpy as np
@@ -27,7 +27,7 @@ from . import quant, scoring
 CLASSES = {
     "M1": ["m1_translation", "m1_orf_share", "m1_peptides", "m1_independent_translation", "m1_phylocsf_weighted",
            "m1_length", "m1_phylop_contrast_weighted", "m1_sequence_features", "m1_crispr_screen"],
-    "M2": ["m2_nmd", "m2_other_translated_orfs", "m2_upf1_kd"],
+    "M2": ["m2_nmd", "m2_other_translated_orfs"],
     "M3": ["m3_neighbour_position", "m3_low_polysome", "m3_coexpression", "m3_nuclear", "m3_enhancer_chromatin"],
     "M4": ["m4_copy_number", "m4_no_cis", "m4_nuclear", "m4_eclip_nuclear"],
     "M5": ["m5_cytoplasmic", "m5_eclip_cytoplasmic"],
@@ -236,7 +236,6 @@ def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=No
     f["m3_coexpression"] = orfs["locus_id"].map(coexpr).to_numpy() if coexpr is not None else np.nan
     enc = encode if encode is not None else pd.DataFrame(columns=["nuclear_log2ratio"])
     nuclear = orfs["locus_id"].map(enc["nuclear_log2ratio"]).astype(float).to_numpy()
-    # m2_upf1_kd stays missing: the ENCODE HepG2 UPF1 shRNA knock-down does not inhibit NMD (encode.py)
     f["m3_nuclear"] = nuclear
     f["m4_copy_number"] = num("log2TPM_HepG2")
     f["m4_no_cis"] = 1.0 - f["m3_neighbour_position"]
