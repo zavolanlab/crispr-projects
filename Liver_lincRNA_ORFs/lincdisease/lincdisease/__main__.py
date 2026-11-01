@@ -64,7 +64,6 @@ def cmd_qc(args):
     if os.path.exists(hpath):
         hom = pd.read_csv(hpath, sep="\t")
         kw["homology"] = hom.loc[hom["parent"].notna(), ["orf_id", "parent", "pident", "qcov"]]
-        kw["kaks"] = hom.set_index("orf_id")["kaks"]
     res = qc.run_qc(orfs, **kw)
     if os.path.exists(hpath):
         h = hom.set_index("orf_id").reindex(orfs["orf_id"])

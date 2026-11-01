@@ -42,21 +42,26 @@ Flags:
 
 **Copy-attribution confidence** (0-1), for ORFs in duplicated regions or with homology to annotated proteins:
 
-1. copy-specific expression and translation: fraction of P-sites from uniquely mapped reads, in-frame P-sites on
-   positions that differ from the paralogs, uniquely mapped RNA-seq coverage and copy-specific splice junctions;
+1. copy-specific translation: fraction of P-sites from uniquely mapped reads (reads on positions that differ
+   from the paralogs map uniquely, so they are included);
 2. copy-specific peptides: identified peptides (proteomics, immunopeptidomics) covering residues that differ from
    the paralogs (1 if present; missing otherwise, as absence of peptides is not evidence against the copy).
    Implemented as a peptide absent from canonical proteins and contaminants that maps to this lincORF only;
-3. selection on the copy: 1 - min(Ka/Ks, 1), Nei-Gojobori Ka/Ks (Jukes-Cantor corrected) between the ORF CDS and
-   the CDS of the best GENCODE hit, on the codon alignment implied by the protein alignment; missing with < 20 aligned
-   codons, dS = 0 (identical copies) or saturated p-distances. Paralogous lincORFs without an annotated parent are not
-   compared;
-4. alignment attribution: age of the duplication, (0.98 - identity) / 0.08 clipped to 0-1 (identity = segmental
+3. alignment attribution: age of the duplication, (0.98 - identity) / 0.08 clipped to 0-1 (identity = segmental
    duplication `fracMatch`, else protein identity to the homolog). For old duplications the multi-species
    alignment likely contains true orthologs of the copy; for very recent ones (> 98% identity) other species
    probably carry the parent.
 
 The confidence is the mean of the available parts (1 for ORFs outside duplications and without homologs).
+Parts 1-2 are the evidence that the copy itself is translated; part 3 only says how far the conservation
+alignment belongs to the copy.
+
+Ka/Ks against the parent (Nei-Gojobori, Jukes-Cantor corrected, on the codon alignment implied by the protein
+alignment with the best GENCODE hit; missing with < 20 aligned codons, dS = 0 or saturated p-distances) is
+reported (`homolog_kaks`) but not used: on run v2 it was uncorrelated with independent translation evidence
+(GENCODE Ribo-seq ORF catalog; Spearman rho -0.01 over 1,757 ORFs), and for recent copies a low Ka/Ks mostly
+reflects selection on the parent before the duplication. Unique RNA-seq coverage and copy-specific splice
+junctions are not used either: they show that the copy is transcribed, not that it is translated.
 
 Conservation is **not** discarded in duplicated regions: if the copy is expressed and translated, conservation
 indicates evolutionary support for its function. PhyloCSF enters the peptide score weighted by the
@@ -65,8 +70,8 @@ copy-attribution confidence.
 **Confidence tier**: `clean`; `caution` (antisense overlap with coding exons, small-RNA overlap,
 multimapper-dominated, possible coding-gene extension, not quantifiable in TCGA/GTEx); `expressed_paralog`
 (duplicated or homologous, with copy-specific evidence); `likely_artefact` (duplicated or homologous, and the
-translation evidence cannot be attributed to the copy: < 50% unique P-sites or multimapper-dominated, no
-copy-specific peptide, and no selection on the copy).
+translation evidence cannot be attributed to the copy: < 50% unique P-sites or multimapper-dominated, and no
+copy-specific peptide).
 
 ## Step 2. Quantification in patient and tissue data
 
@@ -152,7 +157,7 @@ dominant only if its share exceeds the next one by >= 0.05.
 | M2 Translation-coupled RNA regulation | Stop codon > 50 nt upstream of the last exon junction (NMD substrate); upregulation upon NMD inhibition (missing: the ENCODE HepG2 UPF1 shRNA knock-down lowers UPF1 mRNA by only ~30% and does not raise canonical NMD targets such as GAS5, ATF4, GADD45B, TBL2, so it is not used); number of other translated ORFs (moderate/strong evidence) on the locus |
 | M3 Cis-regulation of a neighbour (RNA or DNA element) | Divergent (head-to-head, TSSs within 5 kb) or antisense (exon overlap) position next to a protein-coding gene; co-expression with the nearest protein-coding gene (TSS distance <= 100 kb, either strand; recount3 gene sums) across TCGA-LIHC and GTEx liver: Spearman rho minus the median rho of nearest protein-coding gene pairs in the same TSS-distance bin (0-5, 5-20, 20-50, 50-100 kb); nuclear enrichment (ENCODE HepG2 fractionation); enhancer-like chromatin at the dominant TSS in HepG2 (highest-TPM isoform for loci, Ensembl canonical for controls; ENCODE fold change over control, mean over TSS +- 1 kb; H3K27ac ENCFF795ONN, H3K4me1 ENCFF576YVM, H3K4me3 ENCFF284FVP): log2((H3K4me1 + 1) / (H3K4me3 + 1)) at active TSSs (H3K27ac >= 2-fold), inactive TSSs ranked lowest; low polysome association (low isoform MRL percentile) |
 | M4 Trans-acting RNA, nuclear | Nuclear enrichment; high copy number (HepG2 TPM); HepG2 eCLIP binding by nuclear RBPs (see above); no cis signature |
-| M5 Trans-acting RNA, cytoplasmic | Cytoplasmic enrichment; HepG2 eCLIP binding by cytoplasmic RBPs; ribosome association without one dominant ORF (MRL percentile x (1 - largest ORF share of P-sites on the locus)); miRNA-site density (low weight) |
+| M5 Trans-acting RNA, cytoplasmic | Cytoplasmic enrichment; HepG2 eCLIP binding by cytoplasmic RBPs; ribosome association without one dominant ORF (MRL percentile x (1 - largest ORF share of P-sites on the locus)). miRNA-site density is not used: HepG2 expresses little miR-122, the dominant liver miRNA, and titrating a miRNA takes far more sites than low-copy lincRNAs provide (Denzler et al. 2014), so predicted sites would mostly reflect sequence composition |
 | M6 Small-RNA host | snoRNA, scaRNA or miRNA genes within the locus span on the same strand (GENCODE plus UCSC wgRna, as GENCODE lacks e.g. the GAS5 snoRNAs); snoRNA-host-gene features |
 
 ## Step 5. Positive controls and tests

@@ -30,7 +30,7 @@ CLASSES = {
     "M2": ["m2_nmd", "m2_other_translated_orfs", "m2_upf1_kd"],
     "M3": ["m3_neighbour_position", "m3_low_polysome", "m3_coexpression", "m3_nuclear", "m3_enhancer_chromatin"],
     "M4": ["m4_copy_number", "m4_no_cis", "m4_nuclear", "m4_eclip_nuclear"],
-    "M5": ["m5_ribosome_no_dominant_orf", "m5_cytoplasmic", "m5_eclip_cytoplasmic", "m5_mirna_sites"],
+    "M5": ["m5_ribosome_no_dominant_orf", "m5_cytoplasmic", "m5_eclip_cytoplasmic"],
     "M6": ["m6_small_rna_host"],
 }
 DOMINANCE_MARGIN = 0.05

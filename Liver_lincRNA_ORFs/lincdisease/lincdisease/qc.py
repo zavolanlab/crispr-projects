@@ -4,13 +4,14 @@ Flags never remove ORFs and never change scores; copy-attribution confidence wei
 
 Copy-attribution confidence (0..1) applies to ORFs in segmental duplications / falsely duplicated GRCh38
 regions or with homology to annotated proteins (other ORFs get 1). It is the mean of the available parts:
-  expression   fraction of P-sites from uniquely mapped reads (later also unique RNA-seq / copy-specific
-               junctions and in-frame P-sites on paralog-discriminating positions, when provided)
+  expression   fraction of P-sites from uniquely mapped reads
   peptides     1 if a peptide covers a residue that differs from the paralogs (missing otherwise: absence of
                peptides is not evidence against the copy)
-  selection    1 - min(Ka/Ks, 1) between the ORF and its parent/paralog ORFs
   age          (identity_max - identity) / (identity_max - identity_min), clipped to 0..1: very recent copies
                (identity >= identity_max) leave the multi-species alignment with the parent's orthologs
+Ka/Ks against the parent is reported (homology.py) but not used: on the run it did not agree with independent
+translation evidence, and for recent copies a low Ka/Ks mostly reflects selection on the parent before the
+duplication. Reads on paralog-discriminating positions map uniquely, so they are covered by `expression`.
 """
 import numpy as np
 import pandas as pd
@@ -93,11 +94,10 @@ def qc_flags(orfs, segdups=None, false_dups=None, homology=None, quantifiable=No
     return f
 
 
-def copy_attribution(orfs, flags, copy_peptides=None, kaks=None, identity_max=0.98, identity_min=0.90):
+def copy_attribution(orfs, flags, copy_peptides=None, identity_max=0.98, identity_min=0.90):
     """
     Copy-attribution confidence per ORF (see module docstring). Also returns the parts.
       copy_peptides  Series orf_id -> bool, peptide on a paralog-discriminating residue
-      kaks           Series orf_id -> Ka/Ks of the ORF vs its parent / paralog ORFs
     """
     parts = pd.DataFrame(index=orfs.index)
     parts["attr_expression"] = pd.to_numeric(orfs["frac_psites_unique"], errors="coerce").clip(0, 1)
@@ -106,10 +106,6 @@ def copy_attribution(orfs, flags, copy_peptides=None, kaks=None, identity_max=0.
         parts["attr_peptides"] = np.where(pep, 1.0, np.nan)
     else:
         parts["attr_peptides"] = np.nan
-    if kaks is not None:
-        parts["attr_selection"] = 1.0 - orfs["orf_id"].map(kaks).astype(float).clip(lower=0, upper=1)
-    else:
-        parts["attr_selection"] = np.nan
     identity = flags["segdup_fracMatch"].fillna(flags["homolog_pident"] / 100.0)
     parts["attr_age"] = ((identity_max - identity) / (identity_max - identity_min)).clip(0, 1)
 
@@ -119,11 +115,10 @@ def copy_attribution(orfs, flags, copy_peptides=None, kaks=None, identity_max=0.
     return parts
 
 
-def confidence_tier(flags, parts, min_unique=0.5, min_selection=0.5):
+def confidence_tier(flags, parts, min_unique=0.5):
     """
     likely_artefact    duplicated/homologous, and the translation evidence cannot be attributed to the copy:
-                       < `min_unique` unique P-sites (or multimapper-dominated), no copy-specific peptide and
-                       no selection on the copy (attr_selection < `min_selection` or unknown)
+                       < `min_unique` unique P-sites (or multimapper-dominated) and no copy-specific peptide
     expressed_paralog  duplicated/homologous otherwise
     caution            antisense to coding exons, small-RNA overlap, multimapper-dominated, coding-gene
                        extension or not quantifiable in TCGA/GTEx
@@ -132,8 +127,7 @@ def confidence_tier(flags, parts, min_unique=0.5, min_selection=0.5):
     affected = flags["in_duplication"] | flags["protein_homolog"]
     no_unique = parts["attr_expression"].fillna(0).lt(min_unique) | flags["multimapper_dominated"]
     no_pep = parts["attr_peptides"].isna()
-    no_sel = parts["attr_selection"].fillna(0).lt(min_selection)
-    artefact = affected & no_unique & no_pep & no_sel
+    artefact = affected & no_unique & no_pep
     not_quant = flags["tcga_quantifiable"].eq(False)
     caution = (flags["antisense_to_coding"] | flags["small_RNA_overlap"] | flags["multimapper_dominated"]
                | flags["coding_gene_extension"] | not_quant)
@@ -147,7 +141,7 @@ def confidence_tier(flags, parts, min_unique=0.5, min_selection=0.5):
 def run_qc(orfs, **kwargs):
     """Flags, copy-attribution parts and confidence tier in one table (index of `orfs`)."""
     flag_kw = {k: kwargs[k] for k in ("segdups", "false_dups", "homology", "quantifiable") if k in kwargs}
-    attr_kw = {k: kwargs[k] for k in ("copy_peptides", "kaks") if k in kwargs}
+    attr_kw = {k: kwargs[k] for k in ("copy_peptides",) if k in kwargs}
     flags = qc_flags(orfs, **flag_kw)
     parts = copy_attribution(orfs, flags, **attr_kw)
     out = pd.concat([flags, parts], axis=1)
