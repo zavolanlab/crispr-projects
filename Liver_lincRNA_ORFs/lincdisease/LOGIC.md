@@ -107,6 +107,21 @@ Default weights: D1 0.25, D2 0.25, D3 0.20, D4 0.10, D5 0.10, D6 0.10. Reported 
   is informative;
 * `disease_coverage`, the confidence tier, and `disease_score_noD5` (without prior knowledge).
 
+**HCC score and chronic liver disease score**, reported next to the disease score (same percentiles, weights
+fixed in advance; the disease score is mostly an HCC score, with chronic disease expression at 7.5%):
+
+| Score | Components (weight) |
+|---|---|
+| `hcc_score` | D1 HCC (0.25), D2 (0.25), D3 (0.20), D4 HCC GWAS (0.10), D5 liver cancer papers (0.10), D6 (0.10) |
+| `chronic_score` | D1 chronic (0.50), D4 chronic liver disease GWAS and liver enzymes (0.20), D5 chronic liver disease papers (0.15), D6 (0.15) |
+
+D4 split: HCC = the "hepatocellular carcinoma" trait; chronic = the other whitelisted liver disease traits, and the
+liver enzymes (max -log10 p). D5 split: the liver papers that also match a cancer term (cancer, carcinoma, tumour,
+HCC, hepatoma, hepatocellular, oncogen*, metasta*) or a chronic disease term (NAFLD, MASLD, NASH, MASH, steatosis,
+steatohepatitis, fatty liver, fibrosis, cirrhosis, hepatitis, liver injury / failure, cholestasis); a paper can
+count for both; statistic log2(1 + papers). Directions: `hcc_direction` from D1 HCC, D2 and D3 (as
+`disease_direction`); `chronic_direction` from D1 chronic (up / down with disease, percentile >= 0.75).
+
 **Actionability score** (per ORF, separate from the disease score): equal-weight composite of the percentiles
 (among all ORFs) of tumour-specific expression of the locus (median in TCGA-LIHC primary tumours minus the
 largest median over GTEx tissues except testis), predicted HLA class I presentation (MHCflurry 2 presentation
@@ -154,6 +169,8 @@ Controls are processed by the same code as the candidates (added as extra loci/O
 | D5 | HULC (positive), LINC01090 (negative, symbol collision) | HULC high; no LINC01089 papers credited to LINC01090 |
 | D6 | HNF1A-AS1 | liver-specific |
 | Disease score | HULC, H19 | > 90th percentile of the background |
+| HCC score | HULC, H19 | > 90th percentile of the background |
+| Chronic liver disease score | COL1A1, PNPLA3, TM6SF2 | > 90th percentile of the background |
 | Actionability | GPC3 144-152 (FVGEFFTDV, HLA-A*02:01 vaccine peptide) | presentation percentile <= 2; GPC3 tumour-specific |
 | M1 | MTLN (mitoregulin, former LINC00116), SPAAR (LINC00961) | top class |
 | M2 | GAS5, ZFAS1 | high (M6 also high) |

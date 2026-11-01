@@ -20,6 +20,7 @@ LIVER_DISEASE_TRAITS = {
     "hepatitis C virus infection", "susceptibility to hepatitis B infection measurement",
     "drug-induced liver injury", "Abnormality of the liver", "biliary liver cirrhosis",
 }
+HCC_TRAITS = {"hepatocellular carcinoma"}     # the rest of LIVER_DISEASE_TRAITS is chronic liver disease
 LIVER_ENZYME_TRAITS = {
     "serum alanine aminotransferase amount", "alanine aminotransferase 1 measurement",
     "aspartate aminotransferase measurement", "serum gamma-glutamyl transferase measurement",
@@ -54,7 +55,8 @@ def d4(spans, assoc, flank=50_000):
     by_chrom = {c: g.sort_values("pos") for c, g in assoc.groupby("chrom")}
     for fid, r in spans.iterrows():
         g = by_chrom.get(r["chrom"])
-        rec = {"feature_id": fid, "gwas_disease_max": 0.0, "gwas_enzyme_max": 0.0, "gwas_n": 0,
+        rec = {"feature_id": fid, "gwas_disease_max": 0.0, "gwas_hcc_max": 0.0, "gwas_chronic_max": 0.0,
+               "gwas_enzyme_max": 0.0, "gwas_n": 0,
                "gwas_top_trait": "", "gwas_top_snp": ""}
         if g is not None:
             lo, hi = r["start0"] - flank, r["end1"] + flank
@@ -65,9 +67,16 @@ def d4(spans, assoc, flank=50_000):
                 for cls in ("disease", "enzyme"):
                     m = w.loc[w["trait_class"] == cls, "mlog10p"]
                     rec[f"gwas_{cls}_max"] = float(m.max()) if len(m) else 0.0
+                hcc = w["trait"].isin(HCC_TRAITS)
+                for name, sel in (("hcc", hcc), ("chronic", (w["trait_class"] == "disease") & ~hcc)):
+                    m = w.loc[sel, "mlog10p"]
+                    rec[f"gwas_{name}_max"] = float(m.max()) if len(m) else 0.0
                 top = w.sort_values("mlog10p").iloc[-1]
                 rec["gwas_top_trait"], rec["gwas_top_snp"] = top["trait"], top["snp"]
         rows.append(rec)
     out = pd.DataFrame(rows).set_index("feature_id")
     out["D4"] = out[["gwas_disease_max", "gwas_enzyme_max"]].max(axis=1)
+    # per-score parts: HCC; chronic liver disease (non-HCC liver disease traits and liver enzymes)
+    out["D4_hcc"] = out["gwas_hcc_max"]
+    out["D4_chronic"] = out[["gwas_chronic_max", "gwas_enzyme_max"]].max(axis=1)
     return out

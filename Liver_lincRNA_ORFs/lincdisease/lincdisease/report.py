@@ -30,13 +30,16 @@ def actionability(orfs, disease_loci, peptides, hla_table=None):
 
 def orf_table(orfs, qc_table, disease_loci, mech, act):
     keep_disease = ["disease_score", "disease_coverage", "disease_score_noD5", "disease_direction",
+                    "hcc_score", "hcc_coverage", "hcc_direction", "chronic_score", "chronic_coverage",
+                    "chronic_direction",
                     "comp_D1", "comp_D2", "comp_D3", "comp_D4", "comp_D5", "comp_D6",
                     "log2FC_paired", "fdr_paired", "auc_vs_gtex", "fdr_vs_gtex",
                     "stat_D1_chronic", "chronic_fdr", "hoang_r", "hoang_p", "suppli_r", "suppli_p", "hcv_r", "hcv_p",
                     "D1_chronic_cell", "chronic_cell_fdr", "parent_gene", "parent_rho", "parent_driven",
                     "HR_OS", "fdr_OS", "HR_PFI",
                     "fdr_PFI", "gwas_top_trait", "gwas_top_snp", "gwas_disease_max", "gwas_enzyme_max",
-                    "n_liver", "n_review", "n_retracted", "tumour_specificity"]
+                    "gwas_hcc_max", "gwas_chronic_max", "n_liver", "n_liver_cancer", "n_liver_chronic", "n_review",
+                    "n_retracted", "tumour_specificity"]
     keep_disease += [c for c in ("disease_score_fitted",) if c in disease_loci]
     dl = disease_loci[keep_disease].reindex(orfs["locus_id"])
     dl.index = orfs.index
@@ -109,11 +112,13 @@ def control_report(disease_loci, mech_by_locus_name, hla_control=None):
         _row("HNF1A-AS1", "D6", f"D6 {g('HNF1A-AS1', 'comp_D6'):.2f}", "liver-specific (D6 >= 0.75)",
              g("HNF1A-AS1", "comp_D6") >= 0.75),
     ]
-    for col in ("disease_score", "disease_score_fitted"):
+    score_controls = {"disease_score": ("HULC", "H19"), "disease_score_fitted": ("HULC", "H19"),
+                      "hcc_score": ("HULC", "H19"), "chronic_score": ("COL1A1", "PNPLA3", "TM6SF2")}
+    for col, genes in score_controls.items():
         if col not in d:
             continue
         bg90 = d.loc[~d["is_control"], col].quantile(0.9)
-        for gene in ("HULC", "H19"):
+        for gene in genes:
             rows.append(_row(gene, col, f"{g(gene, col):.3f} (90th pct {bg90:.3f})",
                              "> 90th percentile of the background", g(gene, col) > bg90))
     rows.append(_row("GPC3", "actionability", f"tumour specificity {g('GPC3', 'tumour_specificity'):.2f}",

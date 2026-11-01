@@ -433,6 +433,10 @@ def cmd_disease(args):
     stats["D3"] = d3["D3"]
     stats["D4"] = d4["D4"]
     stats["D5"] = d5["D5"]
+    for c in ("D4_hcc", "D4_chronic"):
+        stats[c] = d4[c]
+    for c in ("D5_hcc", "D5_chronic"):
+        stats[c] = d5[c]
     stats = stats.join(d6)
     # loci that cannot be measured in unstranded public RNA-seq have no expression-based components
     unq = ~feats["quantifiable"].reindex(stats.index).fillna(False).astype(bool)
@@ -444,7 +448,8 @@ def cmd_disease(args):
     tum_spec[unq.reindex(tum_spec.index).fillna(False)] = float("nan")
     out = pd.concat([stats.add_prefix("stat_"), score, d1.drop(columns="D1_HCC"), d1c.drop(columns="D1_chronic"),
                      d2.drop(columns="D2"),
-                     d3.drop(columns="D3"), d4.drop(columns="D4"), d4q, d5.drop(columns=["D5", "symbol"]),
+                     d3.drop(columns="D3"), d4.drop(columns=["D4", "D4_hcc", "D4_chronic"]), d4q,
+                     d5.drop(columns=["D5", "D5_hcc", "D5_chronic", "symbol"]),
                      tum_spec.rename("tumour_specificity")], axis=1)
     out.insert(0, "symbol", loci["locus_name"].reindex(out.index).fillna(out.index.to_series().str.replace("ctrl:", "")))
     out.insert(1, "is_control", out.index.str.startswith("ctrl:"))

@@ -29,6 +29,11 @@ RNA_TERMS = ['lncRNA', '"long non-coding"', '"long noncoding"', '"non-coding RNA
              'transcript', 'micropeptide', 'peptide', 'gene', 'expression']
 LIVER_TERMS = ['liver', 'hepatic', 'hepatocellular', 'hepatocyte*', 'HCC', 'hepatoma', 'cirrhosis',
                '"liver fibrosis"', 'NAFLD', 'MASLD', 'NASH', 'MASH', 'steatosis', 'hepatitis', 'HepG2', 'Huh7']
+# split of the liver papers for the HCC and chronic liver disease scores (a paper can count for both)
+CANCER_TERMS = ['cancer', 'carcinoma', 'tumour', 'tumor', 'HCC', 'hepatoma', 'hepatocellular', 'oncogen*',
+                'metasta*']
+CHRONIC_TERMS = ['NAFLD', 'MASLD', 'NASH', 'MASH', 'steatosis', 'steatohepatitis', '"fatty liver"', 'fibrosis',
+                 'cirrhosis', 'hepatitis', '"liver injury"', '"liver failure"', 'cholestasis', 'cholestatic']
 UNNAMED = re.compile(r"^(ENSG\d+|MSTRG\.\d+|NONHSAG\d+)")
 
 
@@ -64,6 +69,8 @@ def build_queries(symbol, aliases=()):
         "n_liver": liver_q,
         "n_review": f'{liver_q} AND PUB_TYPE:"review"',
         "n_retracted": f'{liver_q} AND PUB_TYPE:"Retracted Publication"',
+        "n_liver_cancer": f"{liver_q} AND ({' OR '.join(CANCER_TERMS)})",
+        "n_liver_chronic": f"{liver_q} AND ({' OR '.join(CHRONIC_TERMS)})",
     }
 
 
@@ -112,10 +119,13 @@ def d5(names, aliases, cache_path, threads=4, max_aliases=5):
             for k, q in queries[fid].items():
                 rec[k] = cache.get(q)
         else:
-            rec.update(n_any=0, n_liver=0, n_review=0, n_retracted=0, aliases_used="")
+            rec.update(n_any=0, n_liver=0, n_review=0, n_retracted=0, n_liver_cancer=0, n_liver_chronic=0,
+                       aliases_used="")
         rows.append(rec)
     out = pd.DataFrame(rows).set_index("feature_id")
-    for k in ("n_any", "n_liver", "n_review", "n_retracted"):
+    for k in ("n_any", "n_liver", "n_review", "n_retracted", "n_liver_cancer", "n_liver_chronic"):
         out[k] = pd.to_numeric(out[k], errors="coerce")
     out["D5"] = np.log2(1 + (out["n_liver"] - out["n_retracted"]).clip(lower=0))
+    out["D5_hcc"] = np.log2(1 + out["n_liver_cancer"])
+    out["D5_chronic"] = np.log2(1 + out["n_liver_chronic"])
     return out

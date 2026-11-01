@@ -14,6 +14,10 @@ DISEASE_WEIGHTS = {"D1": 0.25, "D2": 0.25, "D3": 0.20, "D4": 0.10, "D5": 0.10, "
 D1_WEIGHTS = {"D1_HCC": 0.7, "D1_chronic": 0.3}
 SIGNED = ("D1_HCC", "D1_chronic", "D2", "D3")
 DIRECTION_MIN_PERCENTILE = 0.75
+# the two scores reported next to disease_score (fixed in advance like the default weights); D6 (liver context)
+# is shared, D4/D5 are split by trait class / paper topic
+HCC_WEIGHTS = {"D1_HCC": 0.25, "D2": 0.25, "D3": 0.20, "D4_hcc": 0.10, "D5_hcc": 0.10, "D6": 0.10}
+CHRONIC_WEIGHTS = {"D1_chronic": 0.50, "D4_chronic": 0.20, "D5_chronic": 0.15, "D6": 0.15}
 
 
 def liver_context(expr, samples, cell_lines):
@@ -60,14 +64,26 @@ def disease_score(stats, is_background, weights=DISEASE_WEIGHTS, d1_weights=D1_W
     for c in ("D2", "D3", "D4", "D5"):
         comp[c] = pct[c] if c in pct else np.nan
 
+    for c in ("D1_HCC", "D1_chronic", "D4_hcc", "D4_chronic", "D5_hcc", "D5_chronic"):
+        comp[c] = pct[c] if c in pct else np.nan
+
     res = scoring.composite(comp, weights)
     no5 = {k: v for k, v in weights.items() if k != "D5"}
     out = pd.concat([pct.add_prefix("pct_"), comp.add_prefix("comp_")], axis=1)
     out["disease_score"] = res["score"]
     out["disease_coverage"] = res["coverage"]
     out["disease_score_noD5"] = scoring.composite(comp, no5)["score"]
+    for name, w in (("hcc", HCC_WEIGHTS), ("chronic", CHRONIC_WEIGHTS)):
+        r = scoring.composite(comp, w)
+        out[f"{name}_score"], out[f"{name}_coverage"] = r["score"], r["coverage"]
     dir_cols = [c for c in SIGNED if c in signs]
     out["disease_direction"] = scoring.consensus_direction(pct[dir_cols], signs[dir_cols], DIRECTION_MIN_PERCENTILE,
                                                            labels=("oncogene-like", "suppressor-like"))
+    hcc_cols = [c for c in ("D1_HCC", "D2", "D3") if c in signs]
+    out["hcc_direction"] = scoring.consensus_direction(pct[hcc_cols], signs[hcc_cols], DIRECTION_MIN_PERCENTILE,
+                                                       labels=("oncogene-like", "suppressor-like"))
+    if "D1_chronic" in signs:
+        out["chronic_direction"] = scoring.consensus_direction(pct[["D1_chronic"]], signs[["D1_chronic"]],
+                                                               DIRECTION_MIN_PERCENTILE, labels=("up", "down"))
     # D3 sign is set so that > 0 means oncogene-like (CN gain / loss of methylation silencing raise expression)
     return out
