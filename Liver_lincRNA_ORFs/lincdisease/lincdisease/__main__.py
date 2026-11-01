@@ -463,11 +463,14 @@ def cmd_report(args):
     table.to_csv(os.path.join(args.out_dir, "lincdisease.orfs.tsv"), sep="\t", index=False)
     cand = table[table["is_candidate"]].sort_values(["disease_score", "priority_score"], ascending=False)
     cand.to_csv(os.path.join(args.out_dir, "lincdisease.candidates.tsv"), sep="\t", index=False)
+    screen = report.screen_supported(table, read("support.orfs.tsv"))
+    screen.to_csv(os.path.join(args.out_dir, "lincdisease.screen_supported.tsv"), sep="\t", index=False)
     by_name = mech.assign(rank=orfs["rank"]).sort_values("rank").drop_duplicates("locus_name").set_index("locus_name")
     ctrl = report.control_report(dis, by_name, read("hla.control.tsv"))
     ctrl.to_csv(os.path.join(args.out_dir, "controls.tsv"), sep="\t", index=False)
     print(ctrl.to_string(index=False))
-    print(f"wrote lincdisease.orfs.tsv, lincdisease.candidates.tsv, controls.tsv to {args.out_dir}")
+    print(f"wrote lincdisease.orfs.tsv, lincdisease.candidates.tsv, lincdisease.screen_supported.tsv, controls.tsv "
+          f"to {args.out_dir}")
 
 
 def main():

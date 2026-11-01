@@ -194,8 +194,11 @@ weights stay.
 
 ## Outputs
 
-Per ORF (`lincdisease.orfs.tsv`; candidates only in `lincdisease.candidates.tsv`): QC flags and tier,
+Per ORF (`lincdisease.orfs.tsv`; candidates only in `lincdisease.candidates.tsv`; ORFs with a CRISPR screen
+phenotype (screen value >= 1, see M1), candidates or not, in `lincdisease.screen_supported.tsv` with the screen
+columns, sorted by screen value, confidence tier and disease score): QC flags and tier,
 copy-attribution confidence, disease components, disease score (+ direction, coverage, no-D5 version),
+HCC and chronic liver disease statistics per cohort,
 actionability score, mechanism class scores and relative shares, dominant class. Per locus (`disease.loci.tsv`):
 all locus-level statistics, percentiles and components, for loci and controls. Step tables: `qc.orfs.tsv`,
 `peptides.orfs.tsv`, `support.orfs.tsv`, `mechanism.orfs.tsv`, `coexpression.loci.tsv`, `encode.loci.tsv`, `D3.somatic.tsv`,

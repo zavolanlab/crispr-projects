@@ -31,7 +31,9 @@ def actionability(orfs, disease_loci, peptides, hla_table=None):
 def orf_table(orfs, qc_table, disease_loci, mech, act):
     keep_disease = ["disease_score", "disease_coverage", "disease_score_noD5", "disease_direction",
                     "comp_D1", "comp_D2", "comp_D3", "comp_D4", "comp_D5", "comp_D6",
-                    "log2FC_paired", "fdr_paired", "auc_vs_gtex", "fdr_vs_gtex", "HR_OS", "fdr_OS", "HR_PFI",
+                    "log2FC_paired", "fdr_paired", "auc_vs_gtex", "fdr_vs_gtex",
+                    "stat_D1_chronic", "chronic_fdr", "hoang_r", "hoang_p", "suppli_r", "suppli_p", "hcv_r", "hcv_p",
+                    "HR_OS", "fdr_OS", "HR_PFI",
                     "fdr_PFI", "gwas_top_trait", "gwas_top_snp", "gwas_disease_max", "gwas_enzyme_max",
                     "n_liver", "n_review", "n_retracted", "tumour_specificity"]
     keep_disease += [c for c in ("disease_score_fitted",) if c in disease_loci]
@@ -44,6 +46,23 @@ def orf_table(orfs, qc_table, disease_loci, mech, act):
                  "priority_score"]]
     return pd.concat([base, qc_table[qcols], dl, act[["actionability_score", "actionability_coverage"]],
                       mech[mcols]], axis=1)
+
+
+SCREEN_COLS = ["crispr_screen_value", "prensner_value", "prensner_resolved", "prensner_hepg2_lfc", "chen_value",
+               "chen_K562_phenotype", "chen_K562_fdr", "chen_iPSC_phenotype", "chen_iPSC_fdr",
+               "phylop_orf_minus_nonorf"]
+TIER_ORDER = {"clean": 0, "caution": 1, "expressed_paralog": 2, "likely_artefact": 3}
+
+
+def screen_supported(table, support):
+    """ORFs with a viability phenotype in a published CRISPR screen (screen value >= 1), candidates or not."""
+    s = support.set_index("orf_id")[SCREEN_COLS].reindex(table["orf_id"]).set_axis(table.index)
+    out = pd.concat([table, s], axis=1)
+    out = out[out["crispr_screen_value"] >= 1]
+    key = out["confidence_tier"].map(TIER_ORDER)
+    return (out.assign(_tier=key)
+            .sort_values(["crispr_screen_value", "_tier", "disease_score"], ascending=[False, True, False])
+            .drop(columns="_tier"))
 
 
 def _row(feature, score, value, expectation, passed):
