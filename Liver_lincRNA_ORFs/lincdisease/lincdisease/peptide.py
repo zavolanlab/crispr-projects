@@ -5,7 +5,10 @@ M1 (encoded peptide) sequence and annotation features of every ORF (LOGIC.md, St
   of the GENCODE Ribo-seq ORF catalog (phase 2 comprehensive set, GENCODE v45; phase 1 ORFs with peptide support
   reported separately). Both catalogs and lincorfz include the stop codon in the ORF coordinates.
 * Conservation contrast: mean PhyloP100way over the ORF minus the mean over the exonic positions of its transcript
-  outside the ORF (a translated and functional peptide should be more constrained than the rest of the RNA).
+  outside the ORF (a translated and functional peptide should be more constrained than the rest of the RNA). PhyloP
+  is strand-blind, so only positions in the locus' quantifiable regions (quant/regions.tsv: exons minus the exons
+  of every other GENCODE gene on either strand) are used; otherwise antisense coding exons and small-RNA hairpins
+  would lend their conservation to the ORF.
 * Transmembrane segments: Kyte-Doolittle hydropathy, 19-residue windows with mean >= 1.6 (Kyte & Doolittle 1982);
   overlapping windows form one segment. Open, transparent, and adequate for the short ORFs here.
 * Signal-peptide-like N-terminus (heuristic, as open predictors such as DeepSig no longer install and SignalP is
@@ -179,19 +182,24 @@ def _positions(blocks):
     return np.concatenate([np.arange(s, e) for s, e in blocks]) if blocks else np.array([], dtype=int)
 
 
-def conservation_contrast(orfs, tx_exons, bigwig=PHYLOP_URL, threads=8):
+def conservation_contrast(orfs, tx_exons, bigwig=PHYLOP_URL, threads=8, regions=None, min_orf_nt=30,
+                          min_rest_nt=30):
     """
     Per ORF: mean PhyloP over the ORF, over the exonic positions of its transcript outside the ORF, and their
-    difference. One bigWig query per locus span (works on a remote URL).
+    difference. With `regions` (feature_id/start0/end1, feature_id = locus_id), only positions inside the locus'
+    regions count; missing with < min_orf_nt ORF or < min_rest_nt other positions. One bigWig query per locus span
+    (works on a remote URL).
     """
     import pyBigWig
 
     ex = tx_exons[tx_exons["transcript_id"].isin(set(orfs["transcript_id"]))]
     tx_blocks = {t: list(zip(g["start0"], g["end1"])) for t, g in ex.groupby("transcript_id")}
+    allowed = None if regions is None else {k: list(zip(g["start0"], g["end1"]))
+                                            for k, g in regions.groupby("feature_id")}
     groups = list(orfs.groupby("locus_id"))
 
     def one(item):
-        _, g = item
+        locus, g = item
         bw = pyBigWig.open(bigwig)
         try:
             chrom = g["chrom"].iloc[0]
@@ -201,18 +209,22 @@ def conservation_contrast(orfs, tx_exons, bigwig=PHYLOP_URL, threads=8):
             vals = np.array(bw.values(chrom, lo, hi), dtype=float)
         finally:
             bw.close()
+        keep = None if allowed is None else _positions(allowed.get(locus, []))
         res = []
         for o in g.itertuples():
             orf_pos = _positions(parse_blocks(o.orf_blocks))
             rest = np.setdiff1d(_positions(tx_blocks.get(o.transcript_id, [])), orf_pos)
+            if keep is not None:
+                orf_pos, rest = np.intersect1d(orf_pos, keep), np.intersect1d(rest, keep)
             a, b = vals[orf_pos - lo], vals[rest - lo]
-            ma = np.nanmean(a) if np.isfinite(a).any() else np.nan
-            mb = np.nanmean(b) if np.isfinite(b).sum() >= 30 else np.nan
-            res.append((o.Index, ma, mb, len(rest)))
+            ma = np.nanmean(a) if np.isfinite(a).sum() >= min_orf_nt else np.nan
+            mb = np.nanmean(b) if np.isfinite(b).sum() >= min_rest_nt else np.nan
+            res.append((o.Index, ma, mb, len(orf_pos), len(rest)))
         return res
 
     with ThreadPoolExecutor(threads) as pool:
         rows = [r for part in pool.map(one, groups) for r in part]
-    out = pd.DataFrame(rows, columns=["idx", "phylop_orf", "phylop_nonorf_exons", "nonorf_exon_nt"]).set_index("idx")
+    out = pd.DataFrame(rows, columns=["idx", "phylop_orf", "phylop_nonorf_exons", "orf_nt", "nonorf_exon_nt"])
+    out = out.set_index("idx")
     out["phylop_orf_minus_nonorf"] = out["phylop_orf"] - out["phylop_nonorf_exons"]
     return out.reindex(orfs.index)

@@ -4,6 +4,7 @@ Command-line driver of lincdisease; one sub-command per step of LOGIC.md, each w
   python -m lincdisease qc       --results-dir R --candidates T --data-dir D --peptides-dir P --out-dir O
   python -m lincdisease homology --results-dir R --candidates T --data-dir D --out-dir O [--diamond PATH]
   python -m lincdisease peptide  --results-dir R --candidates T --data-dir D --out-dir O --tool-env ENV
+  python -m lincdisease support  --results-dir R --candidates T --data-dir D --out-dir O [--phylop BIGWIG]
   python -m lincdisease regions  --results-dir R --candidates T --data-dir D --out-dir O
   python -m lincdisease manifest --out-dir O [--gtex-per-tissue 10]
   python -m lincdisease quant    --out-dir O --project LIHC [--worker 0 --n-workers 4] [--scratch S]
@@ -29,7 +30,7 @@ import glob
 import json
 
 from . import (chromatin, chronic, controls, disease, eclip, encode, eqtl, genetics, homology, inputs, integrate,
-               hla, literature, mechanism, peptide, qc, quant, report, resources, somatic, weights)
+               hla, literature, mechanism, peptide, qc, quant, report, resources, screens, somatic, weights)
 from . import scoring
 
 
@@ -111,6 +112,21 @@ def cmd_peptide(args):
     menv = {"MHCFLURRY_DATA_DIR": os.path.join(args.data_dir, "mhcflurry")}
     res = hla.run(orfs, os.path.join(env, "python"), os.path.join(args.out_dir, "hla.orfs.tsv"), env=menv)
     print(f"HLA: ORFs with >= 1 binder {(res['hla_any_n_binders'] > 0).sum()} of {len(res)}")
+
+
+def cmd_support(args):
+    """M1 conservation contrast (PhyloP100way, ORF vs the rest of its transcript's exons) and published CRISPR
+    screen hits (Prensner et al. 2021 supplementary tables in <data_dir>/crispr_screens)."""
+    orfs = inputs.load(args.results_dir, args.candidates)
+    tx_exons = quant.read_gtf_exons(os.path.join(args.results_dir, "lincRNAs", "lincRNA_transcripts.gtf"))
+    regions = pd.read_csv(os.path.join(args.out_dir, "quant", "regions.tsv"), sep="\t")
+    cons = peptide.conservation_contrast(orfs, tx_exons, bigwig=args.phylop, threads=args.threads, regions=regions)
+    d = os.path.join(args.data_dir, "crispr_screens", "NIHMS1698134-supplement-Supplementary_Tables_")
+    screen = screens.read_prensner(d + "1-17.xlsx", d + "21-32.xlsx")
+    out = pd.concat([orfs[["orf_id"]], cons, screens.match(orfs, screen, "prensner")], axis=1)
+    out.to_csv(os.path.join(args.out_dir, "support.orfs.tsv"), sep="\t", index=False)
+    print(f"support: PhyloP contrast for {out['phylop_orf_minus_nonorf'].notna().sum()} ORFs; Prensner screen "
+          f"matches {(out['prensner_orfs'] != '').sum()}, values {out['prensner_value'].value_counts().to_dict()}")
 
 
 def cmd_regions(args):
@@ -331,7 +347,9 @@ def cmd_mechanism(args):
                                *(pd.read_csv(os.path.join(args.out_dir, f"{t}.loci.tsv"), sep="\t", index_col=0)
                                  for t in ("encode", "eclip", "chromatin")),
                                peptide_feats=pd.read_csv(os.path.join(args.out_dir, "peptide_features.orfs.tsv"),
-                                                         sep="\t", index_col=0))
+                                                         sep="\t", index_col=0),
+                               orf_support=pd.read_csv(os.path.join(args.out_dir, "support.orfs.tsv"), sep="\t",
+                                                       index_col=0))
     res = mechanism.class_table(feats, pd.Series(True, index=orfs.index))
     out = pd.concat([orfs[["orf_id", "orf_label", "locus_id", "locus_name", "is_candidate"]],
                      feats.add_prefix("raw_"), res], axis=1)
@@ -468,6 +486,12 @@ def main():
     pp.add_argument("--threads", type=int, default=4)
     pp.add_argument("--skip-hla", action="store_true")
     pp.set_defaults(func=cmd_peptide)
+
+    su = sub.add_parser("support", help="Step 4 M1: ORF vs exon PhyloP contrast, published CRISPR screen hits")
+    _common(su)
+    su.add_argument("--phylop", default=peptide.PHYLOP_URL, help="PhyloP100way bigWig (path or URL)")
+    su.add_argument("--threads", type=int, default=4)
+    su.set_defaults(func=cmd_support)
 
     r = sub.add_parser("regions", help="Step 2: quantifiable exonic regions of loci and controls")
     _common(r)

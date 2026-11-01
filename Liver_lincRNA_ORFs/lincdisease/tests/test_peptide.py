@@ -75,3 +75,26 @@ def test_hla_summarize():
     assert s.loc["b", "hla_HepG2_best_pct"] == pytest.approx(10.0)
     f = hla.finalize(s, ["a", "b", "short"])
     assert f.loc["short", "hla_any_n_binders"] == 0 and np.isnan(f.loc["short", "hla_HepG2_best_pct"])
+
+
+def test_conservation_contrast(tmp_path):
+    pyBigWig = pytest.importorskip("pyBigWig")
+    bw_path = str(tmp_path / "p.bw")
+    bw = pyBigWig.open(bw_path, "w")
+    bw.addHeader([("chr1", 1000)])
+    vals = [0.0] * 100 + [3.0] * 30 + [0.0] * 100          # exons 0-100 and 130-230 at 0, ORF 100-130 at 3
+    bw.addEntries("chr1", 0, values=vals, span=1, step=1)
+    bw.close()
+    orfs = pd.DataFrame({"locus_id": ["L"], "chrom": ["chr1"], "transcript_id": ["T"], "orf_blocks": ["100-130"]})
+    tx = pd.DataFrame({"transcript_id": ["T", "T"], "start0": [0, 130], "end1": [100, 230]})
+    res = peptide.conservation_contrast(orfs, tx, bigwig=bw_path, threads=1)
+    assert res.loc[0, "phylop_orf"] == pytest.approx(3.0)
+    assert res.loc[0, "phylop_nonorf_exons"] == pytest.approx(0.0)
+    assert res.loc[0, "phylop_orf_minus_nonorf"] == pytest.approx(3.0)
+    assert res.loc[0, "nonorf_exon_nt"] == 200
+    # positions outside the locus' regions (e.g. an antisense coding exon over half the ORF) are not used
+    regions = pd.DataFrame({"feature_id": ["L", "L"], "start0": [0, 115], "end1": [100, 230]})
+    res = peptide.conservation_contrast(orfs, tx, bigwig=bw_path, threads=1, regions=regions, min_orf_nt=10)
+    assert res.loc[0, "orf_nt"] == 15
+    res = peptide.conservation_contrast(orfs, tx, bigwig=bw_path, threads=1, regions=regions)
+    assert np.isnan(res.loc[0, "phylop_orf_minus_nonorf"])         # < 30 ORF positions left
