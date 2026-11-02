@@ -6,6 +6,9 @@ Cohorts (phenotypes from the recount3 SRA `sample_attributes`):
   hoang   SRP197353 (GSE130970, Hoang et al. 2019): 78 NAFLD biopsies, fibrosis stage 0-4 and NAFLD activity score
   suppli  SRP186450 (GSE126848, Suppli et al. 2019): 14 normal-weight, 12 obese, 15 NAFL, 16 NASH
   hcv     SRP078450 (GSE84346, Boldanova et al. 2017): untreated biopsies, 22 HCV-infected, 6 non-HCV
+  govaere GSE135251 (Govaere et al. 2020): 206 NAFLD biopsies (NAFL, NASH F0-F4) and 10 controls, fibrosis stage and
+          NAS; aligned here (STAR, GENCODE v42; workflow/rules/govaere.smk), loci counted in the CRAMs over the same
+          regions (samtools bedcov), gene counts and technical covariates from STAR
 
 Sample scaling: `ncov` is divided by the total base coverage (AUC), which lets the hepatocyte transcripts that
 dominate liver RNA set the scale; their share falls with injury and lifts everything else. ncov is therefore divided
@@ -13,7 +16,7 @@ by median-of-ratios size factors of the recount3 gene sums (expressed protein-co
 left out), relative to the AUC scaling.
 
 Per cohort, a signed partial rank correlation in [-1, 1] of log2(scaled ncov + pseudocount) with the phenotype
-(> 0 = higher with disease): fibrosis stage (hoang; NAS reported), NAFL + NASH vs normal-weight + obese (suppli),
+(> 0 = higher with disease): fibrosis stage (hoang, govaere; NAS reported), NAFL + NASH vs normal-weight + obese (suppli),
 HCV vs non-HCV (hcv). Ranks of expression and phenotype are residualized on the ranks of the technical covariates
 (log input reads, % uniquely mapped reads, exonic fraction; Suppli cases differ from controls in all three), and
 the p-value is a t test with n - 2 - k degrees of freedom.
@@ -21,9 +24,12 @@ the p-value is a t test with n - 2 - k degrees of freedom.
                  (`parent_driven`), the parent gene's expression is added as a covariate
   cell-intrinsic technical covariates + cell-type marker scores (reported, not scored: a lincRNA of stellate
                  cells that rises with fibrosis is disease-associated, but not regulated within cells)
-D1_chronic = weighted mean of the available scored cohort statistics (fibrosis 2/3, hcv 1/3; suppli 0, see WEIGHTS); the combined
+D1_chronic = weighted mean of the available scored cohort statistics (fibrosis 2/3, split between hoang and govaere by
+cohort size; hcv 1/3; suppli 0, see WEIGHTS); the combined
 p-value is Stouffer's (z from the two-sided p with the sign of the statistic, weights sqrt(n)), BH-FDR over features.
 """
+import os
+
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -35,7 +41,11 @@ COHORTS = {"hoang": "SRP197353", "suppli": "SRP186450", "hcv": "SRP078450"}
 # Suppli is reported, not scored: its cases differ technically from its controls (fewer uniquely mapped reads,
 # lower exonic fraction; the 15 samples with the lowest exonic fraction are all cases), and after scaling and
 # covariate adjustment 40% of loci still have p < 0.01 with a median r of +0.14 (Hoang: 9%, 0.00)
-WEIGHTS = {"hoang": 2 / 3, "suppli": 0.0, "hcv": 1 / 3}
+# the two fibrosis cohorts share 2/3 in proportion to their size (78 and 216 biopsies)
+FIBROSIS_COHORTS = {"hoang": 78, "govaere": 216}
+WEIGHTS = {**{c: 2 / 3 * n / sum(FIBROSIS_COHORTS.values()) for c, n in FIBROSIS_COHORTS.items()},
+           "suppli": 0.0, "hcv": 1 / 3}
+ALL_COHORTS = [*COHORTS, "govaere"]    # COHORTS: recount3 projects
 MIN_DETECTED = 0.2      # features detected (ncov > 0) in fewer samples of a cohort are not tested
 TECHNICAL = ["log_input_reads", "pct_unique", "exonic_fraction"]
 # liver cell-type markers (MacParland et al. 2018 liver atlas); COL1A1 left out, as it is the D1 chronic control,
@@ -96,6 +106,45 @@ def manifest():
     keep = man["fibrosis_stage"].notna() | man["group"].notna()     # drops IFN-treated HCV biopsies
     return man[keep].reset_index(drop=True)
 
+
+
+def govaere(gov_dir, runs_tsv, soft):
+    """
+    Finished Govaere runs (locus_cov/<run>.tsv present) -> ncov (features x samples), STAR gene counts (unversioned
+    gene id x samples; column 4, reverse-stranded library), QC rows in recount_qc column names, phenotypes.
+    Sample ids 'govaere:<run>'. `soft`: GEO sample annotation (acc.cgi text format) with the sample characteristics.
+    """
+    rec, cur = [], None
+    for line in open(soft):
+        if line.startswith("^SAMPLE"):
+            cur = {"gsm": line.split("=")[1].strip()}
+            rec.append(cur)
+        elif line.startswith("!Sample_characteristics_ch1") and cur is not None:
+            k, _, v = line.split("=", 1)[1].strip().partition(": ")
+            cur[k] = v
+    meta = pd.DataFrame(rec)
+    runs = pd.read_csv(runs_tsv, sep="\t")[["run_accession", "experiment_alias"]]
+    meta = runs.merge(meta, left_on="experiment_alias", right_on="gsm").set_index("run_accession")
+    done = [r for r in meta.index if os.path.exists(os.path.join(gov_dir, "locus_cov", f"{r}.tsv"))]
+    ids = ["govaere:" + r for r in done]
+    ncov = pd.concat([pd.read_csv(os.path.join(gov_dir, "locus_cov", f"{r}.tsv"), sep="\t", index_col=0)["ncov"]
+                      for r in done], axis=1, keys=ids).fillna(0)
+    genes = pd.concat([pd.read_csv(os.path.join(gov_dir, "counts", f"{r}.ReadsPerGene.tsv"), sep="\t", header=None,
+                                   index_col=0)[3] for r in done], axis=1, keys=ids)
+    genes = genes.loc[~genes.index.str.startswith("N_")]
+    genes.index = genes.index.str.split(".").str[0]
+    genes = genes.groupby(level=0).sum()
+    qc = {}
+    for r, i in zip(done, ids):
+        d = dict((k.strip(), v.strip()) for k, v in (line.split("|", 1) for line in
+                 open(os.path.join(gov_dir, "star_logs", f"{r}.Log.final.out")) if "|" in line))
+        qc[i] = {"star.number_of_input_reads_both": int(d["Number of input reads"]),
+                 "star.uniquely_mapped_reads_%_both": float(d["Uniquely mapped reads %"].rstrip("%"))}
+    pheno = pd.DataFrame({"cohort": "govaere",
+                          "fibrosis_stage": pd.to_numeric(meta.loc[done, "fibrosis stage"], errors="coerce").to_numpy(),
+                          "nas": pd.to_numeric(meta.loc[done, "nas score"], errors="coerce").to_numpy(),
+                          "group": np.nan}, index=ids)
+    return ncov, genes, pd.DataFrame(qc).T, pheno
 
 
 def size_factors(genes):
@@ -159,7 +208,7 @@ def partial_rank(expr, y, covars=None):
 
 
 def _phenotype(pheno, idx, cohort):
-    if cohort == "hoang":
+    if cohort in FIBROSIS_COHORTS:
         return pheno.loc[idx, "fibrosis_stage"].astype(float)
     g = pheno.loc[idx, "group"]
     return (g == "case").astype(float).where(g.notna())
@@ -169,7 +218,7 @@ def cohort_stats(expr, ncov, pheno, covars, suffix=""):
     """Per feature and cohort: partial rank statistic, p, n (columns <cohort>_r/_p/_n<suffix>); hoang also vs NAS.
     covars: {cohort: samples x k DataFrame}."""
     res = {}
-    for cohort in COHORTS:
+    for cohort in ALL_COHORTS:
         idx = pheno.index[pheno["cohort"] == cohort]
         if not len(idx):
             continue
@@ -177,15 +226,21 @@ def cohort_stats(expr, ncov, pheno, covars, suffix=""):
         e = expr.loc[detected, idx]
         z = covars.get(cohort)
         t = partial_rank(e, _phenotype(pheno, idx, cohort), z)
-        if cohort == "hoang":
+        if cohort in FIBROSIS_COHORTS:
             nas = partial_rank(e, pheno.loc[idx, "nas"].astype(float), z)
-            res[f"hoang_nas_rho{suffix}"], res[f"hoang_nas_p{suffix}"] = nas["stat"], nas["p"]
+            res[f"{cohort}_nas_rho{suffix}"], res[f"{cohort}_nas_p{suffix}"] = nas["stat"], nas["p"]
         res[f"{cohort}_r{suffix}"], res[f"{cohort}_p{suffix}"], res[f"{cohort}_n{suffix}"] = t["stat"], t["p"], t["n"]
     return pd.DataFrame(res).reindex(expr.index)
 
 
 def combine(cs, weights=WEIGHTS, suffix=""):
-    """D1_chronic (weighted mean of cohort statistics), Stouffer p and BH-FDR."""
+    """D1_chronic (weighted mean of cohort statistics), Stouffer p and BH-FDR. A fibrosis cohort without data passes
+    its weight to the other one."""
+    fib = [c for c in FIBROSIS_COHORTS if f"{c}_r{suffix}" in cs]
+    if fib:
+        total = sum(weights.get(c, 0) for c in FIBROSIS_COHORTS)
+        n_fib = sum(FIBROSIS_COHORTS[c] for c in fib)
+        weights = {**weights, **{c: total * FIBROSIS_COHORTS[c] / n_fib for c in fib}}
     cohorts = [c for c in weights if weights[c] > 0 and f"{c}_r{suffix}" in cs]
     r = cs[[f"{c}_r{suffix}" for c in cohorts]].to_numpy(float)
     p = cs[[f"{c}_p{suffix}" for c in cohorts]].to_numpy(float)
@@ -231,7 +286,7 @@ def d1_chronic(ncov, pheno, genes, qc, symbol_to_id, protein_coding, parents=Non
     pc = genes.loc[genes.index.intersection(pd.Index(protein_coding))]
     sf, tech, cells = {}, {}, {}
     log_genes = np.log2(genes + 1)
-    for cohort in COHORTS:
+    for cohort in ALL_COHORTS:
         idx = pheno.index[pheno["cohort"] == cohort]
         if not len(idx):
             continue
@@ -254,7 +309,7 @@ def d1_chronic(ncov, pheno, genes, qc, symbol_to_id, protein_coding, parents=Non
         pg = log_genes.loc[parents.unique()]
         pres = combine(cohort_stats(pg, genes.loc[parents.unique()], pheno, tech))
         rho = pd.Series({fid: np.nanmedian([stats.spearmanr(expr.loc[fid, idx], pg.loc[gid, idx])[0]
-                                            for idx in (pheno.index[pheno["cohort"] == c] for c in COHORTS)])
+                                            for idx in (pheno.index[pheno["cohort"] == c] for c in ALL_COHORTS)])
                          for fid, gid in parents.items()})
         out["parent_gene"] = parents.reindex(out.index)
         out["parent_rho"] = rho.reindex(out.index)

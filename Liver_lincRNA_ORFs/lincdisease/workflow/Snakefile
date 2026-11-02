@@ -206,11 +206,15 @@ rule encode:
 
 
 rule chronic:
-    input: QUANT_SRA, "quant_sra/samples.tsv", "quant/features.tsv", "qc.orfs.tsv", NEEDS_FETCH, src("chronic")
+    # Govaere: the runs finished so far (locus_cov/<run>.tsv of scripts/govaere_locus_cov.sh); rerun with
+    # `run.sh redo chronic` when more are done
+    input: QUANT_SRA, "quant_sra/samples.tsv", "quant/features.tsv", "qc.orfs.tsv", NEEDS_FETCH, src("chronic"),
+           soft=f"{GD}/metadata/GSE135251_samples.soft.txt"
     output: "D1.chronic.tsv", "quant_sra/size_factors.tsv"
     resources: mem_mb=mem(48), runtime=120
     log: "logs/chronic.log"
-    shell: "{LD} chronic --data-dir {D} > {log} 2>&1"
+    shell: "{LD} chronic --data-dir {D} --govaere-dir {GD} --govaere-runs {GOV_RUNS_TSV} --govaere-soft {input.soft} "
+           "> {log} 2>&1"
 
 
 rule mechanism:

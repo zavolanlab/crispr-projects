@@ -220,7 +220,15 @@ def cmd_chronic(args):
     orfq = pd.read_csv(os.path.join(args.out_dir, "qc.orfs.tsv"), sep="\t").dropna(subset=["homolog_parent"])
     best = orfq.sort_values("homolog_pident", ascending=False).drop_duplicates("locus_id").set_index("locus_id")
     parents = best["homolog_parent"].map(symbol_to_id).dropna()
-    res, sf = chronic.d1_chronic(ncov, samples.set_index("sample_id")[["cohort", "fibrosis_stage", "nas", "group"]],
+    pheno = samples.set_index("sample_id")[["cohort", "fibrosis_stage", "nas", "group"]]
+    if args.govaere_dir:
+        g_ncov, g_genes, g_qc, g_pheno = chronic.govaere(args.govaere_dir, args.govaere_runs, args.govaere_soft)
+        print(f"Govaere: {len(g_pheno)} runs")
+        ncov = pd.concat([ncov, g_ncov.reindex(ncov.index)], axis=1)
+        genes = pd.concat([genes, g_genes], axis=1)
+        qc = pd.concat([qc, g_qc])
+        pheno = pd.concat([pheno, g_pheno])
+    res, sf = chronic.d1_chronic(ncov, pheno,
                                  genes, qc, symbol_to_id, gtf.loc[gtf["gene_type"] == "protein_coding", "gene_id"],
                                  parents=parents, pseudocount=args.pseudocount)
     sf.rename("size_factor").to_csv(os.path.join(d, "size_factors.tsv"), sep="\t", index_label="sample_id")
@@ -629,6 +637,10 @@ def main():
     ch.add_argument("--manifest", action="store_true", help="write quant_sra/samples.tsv (needs network)")
     ch.add_argument("--pseudocount", type=float, default=0.05)
     ch.add_argument("--data-dir", help="download cache (recount3 gene sums and QC, GENCODE); not needed with --manifest")
+    ch.add_argument("--govaere-dir", help="Govaere directory (locus_cov/, counts/, star_logs/); its finished runs "
+                                          "enter as the cohort 'govaere'")
+    ch.add_argument("--govaere-runs", help="ENA run table of the Govaere runs")
+    ch.add_argument("--govaere-soft", help="GEO sample annotation of GSE135251 (acc.cgi text format)")
     ch.set_defaults(func=cmd_chronic)
 
     nm = sub.add_parser("nmd", help="Step 4, M2: NMD sensitivity from HeLa NMD knock-downs (quant_nmd/)")

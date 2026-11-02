@@ -152,8 +152,12 @@ C.push(p("Samples: TCGA-LIHC (424 samples: 371 primary tumours, one per patient,
   "matched tumour), GTEx (550 samples: all 251 liver samples and 10 random samples of each of the other 30 " +
   "tissues), and three recount3 SRA chronic liver disease cohorts: Hoang et al. 2019 (GSE130970, 78 NAFLD " +
   "biopsies with fibrosis stage 0-4 and NAFLD activity score), Suppli et al. 2019 (GSE126848, 57: normal-weight, " +
-  "obese, NAFL, NASH) and Boldanova et al. 2017 (GSE84346, 28 untreated biopsies, HCV-infected vs non-HCV). " +
-  "Phenotypes come from the recount3 SRA sample attributes."));
+  "obese, NAFL, NASH) and Boldanova et al. 2017 (GSE84346, 28 untreated biopsies, HCV-infected vs non-HCV), " +
+  "with phenotypes from the recount3 SRA sample attributes. A fourth cohort, Govaere et al. 2020 (GSE135251, " +
+  "206 NAFLD biopsies with fibrosis stage and NAFLD activity score, 10 controls), is not in recount3: its reads " +
+  "were aligned with STAR 2.7.11b to GRCh38 / GENCODE v42, the loci counted in the alignments over the same " +
+  "regions (samtools bedcov), and gene counts (reverse-stranded library) and technical covariates taken from " +
+  "STAR; phenotypes come from the GEO sample characteristics."));
 
 // 4
 C.push(h1("4. Disease components D1-D6 (per locus)"));
@@ -180,7 +184,7 @@ C.push(eq(Sub(R("s"), R("j")), R(" = exp "), Sq([Sub(R("median"), R("g")), Par([
   F(R("1"), R("n")), Sum(R("j′"), null, [R("ln "), Sub(R("y"), R("gj′"))])])]), R(",    "),
   Sub(R("e"), R("fj")), R(" = "), Sub(R("log"), R("2")), Par([F(Sub(R("ncov"), R("fj")), Sub(R("s"), R("j"))), R(" + 0.05")])));
 C.push(p("with the *s*_{j} rescaled to geometric mean 1 per cohort."));
-C.push(p("**Per-cohort statistic.** A partial rank correlation of expression with the phenotype *y* (Hoang: " +
+C.push(p("**Per-cohort statistic.** A partial rank correlation of expression with the phenotype *y* (Hoang, Govaere: " +
   "fibrosis stage; Suppli: NAFL + NASH = 1 vs normal-weight + obese = 0; Boldanova: HCV = 1 vs non-HCV = 0), " +
   "adjusted for *k* = 3 technical covariates (log10 input reads, % uniquely mapped reads, exonic fraction = " +
   "sum of gene sums / 10^9). With *X* = [1, ranks of the covariates] and the hat matrix *H* = *XX*⁺, the ranks " +
@@ -188,8 +192,9 @@ C.push(p("**Per-cohort statistic.** A partial rank correlation of expression wit
 C.push(eq(R("u = (I − H) rank(e),    v = (I − H) rank(y),    r = "), F(R("u · v"), [R("‖u‖ ‖v‖")])));
 C.push(eq(R("t = r "), Sqrt(F(R("n − 2 − k"), [R("1 − "), Sup(R("r"), R("2"))])), R(",    p = 2 "), Sub(R("P"), R("t(n−2−k)")), R("(T > |t|)")));
 C.push(p("A feature detected (ncov > 0) in < 20% of a cohort's samples is not tested in that cohort. The NAFLD " +
-  "activity score association (Hoang) is reported."));
-C.push(p("**Combination.** Over the scored cohorts *c* with a statistic (weights *w*_{hoang} = 2/3, *w*_{hcv} = 1/3, " +
+  "activity score association (Hoang, Govaere) is reported."));
+C.push(p("**Combination.** Over the scored cohorts *c* with a statistic (weights *w*_{hoang} = 2/3 × 78/294, " +
+  "*w*_{govaere} = 2/3 × 216/294, the whole 2/3 to one fibrosis cohort if the other has no data; *w*_{hcv} = 1/3, " +
   "*w*_{suppli} = 0):"));
 C.push(eq(Sub(R("D1"), R("chronic")), R(" = "), F(Sum(R("c"), null, [Sub(R("w"), R("c")), Sub(R("r"), R("c"))]), Sum(R("c"), null, Sub(R("w"), R("c")))),
   R(",    "), Sub(R("z"), R("c")), R(" = sgn("), Sub(R("r"), R("c")), R(") "), Sup(R("Φ"), R("−1")), Par([R("1 − "), F(Sub(R("p"), R("c")), R("2"))]),
