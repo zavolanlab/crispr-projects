@@ -47,7 +47,8 @@ def test_class_table_phylocsf_weighting():
     feats = pd.DataFrame({c: [0.0, 1.0] for cols in mechanism.CLASSES.values() for c in cols})
     feats["m1_phylocsf"] = [0.0, 10.0]
     feats["copy_attribution"] = [1.0, 0.0]
-    res = mechanism.class_table(feats.drop(columns=["m1_phylocsf_weighted"]), pd.Series([True, True]))
+    res = mechanism.class_table(feats.drop(columns=["m1_phylocsf_weighted"]), pd.Series([True, True]),
+                                ["L1", "L2"])
     assert res.loc[1, "pct_m1_phylocsf_weighted"] == pytest.approx(0.5)   # no attribution -> neutral
     assert res.loc[0, "pct_m1_phylocsf_weighted"] == pytest.approx(0.25)
 

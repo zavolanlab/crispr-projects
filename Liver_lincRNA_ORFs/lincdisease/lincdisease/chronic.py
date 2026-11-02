@@ -8,7 +8,8 @@ Cohorts (phenotypes from the recount3 SRA `sample_attributes`):
   hcv     SRP078450 (GSE84346, Boldanova et al. 2017): untreated biopsies, 22 HCV-infected, 6 non-HCV
   govaere GSE135251 (Govaere et al. 2020): 206 NAFLD biopsies (NAFL, NASH F0-F4) and 10 controls, fibrosis stage and
           NAS; aligned here (STAR, GENCODE v42; workflow/rules/govaere.smk), loci counted in the CRAMs over the same
-          regions (samtools bedcov), gene counts and technical covariates from STAR
+          regions (samtools bedcov), gene counts and technical covariates from STAR (exonic fraction = reads
+          assigned to genes / uniquely mapped reads)
 
 Sample scaling: `ncov` is divided by the total base coverage (AUC), which lets the hepatocyte transcripts that
 dominate liver RNA set the scale; their share falls with injury and lifts everything else. ncov is therefore divided
@@ -24,8 +25,9 @@ the p-value is a t test with n - 2 - k degrees of freedom.
                  (`parent_driven`), the parent gene's expression is added as a covariate
   cell-intrinsic technical covariates + cell-type marker scores (reported, not scored: a lincRNA of stellate
                  cells that rises with fibrosis is disease-associated, but not regulated within cells)
-D1_chronic = weighted mean of the available scored cohort statistics (fibrosis 2/3, split between hoang and govaere by
-cohort size; hcv 1/3; suppli 0, see WEIGHTS); the combined
+D1_chronic = weighted mean of the available scored cohort statistics, per feature: fibrosis 2/3, split between hoang
+and govaere in proportion to the samples tested for the feature (all of it to one cohort if the other has no
+statistic); hcv 1/3; suppli 0; a feature without a fibrosis statistic is the hcv statistic, and vice versa. The combined
 p-value is Stouffer's (z from the two-sided p with the sign of the statistic, weights sqrt(n)), BH-FDR over features.
 """
 import os
@@ -41,10 +43,10 @@ COHORTS = {"hoang": "SRP197353", "suppli": "SRP186450", "hcv": "SRP078450"}
 # Suppli is reported, not scored: its cases differ technically from its controls (fewer uniquely mapped reads,
 # lower exonic fraction; the 15 samples with the lowest exonic fraction are all cases), and after scaling and
 # covariate adjustment 40% of loci still have p < 0.01 with a median r of +0.14 (Hoang: 9%, 0.00)
-# the two fibrosis cohorts share 2/3 in proportion to their size (78 and 216 biopsies)
-FIBROSIS_COHORTS = {"hoang": 78, "govaere": 216}
-WEIGHTS = {**{c: 2 / 3 * n / sum(FIBROSIS_COHORTS.values()) for c, n in FIBROSIS_COHORTS.items()},
-           "suppli": 0.0, "hcv": 1 / 3}
+# the fibrosis cohorts share FIBROSIS_WEIGHT in proportion to the samples tested (per feature)
+FIBROSIS_COHORTS = ("hoang", "govaere")
+FIBROSIS_WEIGHT = 2 / 3
+WEIGHTS = {"suppli": 0.0, "hcv": 1 / 3}
 ALL_COHORTS = [*COHORTS, "govaere"]    # COHORTS: recount3 projects
 MIN_DETECTED = 0.2      # features detected (ncov > 0) in fewer samples of a cohort are not tested
 TECHNICAL = ["log_input_reads", "pct_unique", "exonic_fraction"]
@@ -128,9 +130,15 @@ def govaere(gov_dir, runs_tsv, soft):
     done = [r for r in meta.index if os.path.exists(os.path.join(gov_dir, "locus_cov", f"{r}.tsv"))]
     ids = ["govaere:" + r for r in done]
     ncov = pd.concat([pd.read_csv(os.path.join(gov_dir, "locus_cov", f"{r}.tsv"), sep="\t", index_col=0)["ncov"]
-                      for r in done], axis=1, keys=ids).fillna(0)
+                      for r in done], axis=1, keys=ids)
+    # a feature is absent from a run's file only if the file predates it (bedcov reports every region)
+    stale = ncov.columns[ncov.isna().any()]
+    if len(stale):
+        raise ValueError(f"{len(stale)} Govaere locus_cov files lack features of the others (older regions.tsv); "
+                         f"delete and recompute them: {', '.join(c.split(':')[1] for c in stale[:10])}")
     genes = pd.concat([pd.read_csv(os.path.join(gov_dir, "counts", f"{r}.ReadsPerGene.tsv"), sep="\t", header=None,
                                    index_col=0)[3] for r in done], axis=1, keys=ids)
+    assigned = genes.loc[~genes.index.str.startswith("N_")].sum()
     genes = genes.loc[~genes.index.str.startswith("N_")]
     genes.index = genes.index.str.split(".").str[0]
     genes = genes.groupby(level=0).sum()
@@ -139,7 +147,8 @@ def govaere(gov_dir, runs_tsv, soft):
         d = dict((k.strip(), v.strip()) for k, v in (line.split("|", 1) for line in
                  open(os.path.join(gov_dir, "star_logs", f"{r}.Log.final.out")) if "|" in line))
         qc[i] = {"star.number_of_input_reads_both": int(d["Number of input reads"]),
-                 "star.uniquely_mapped_reads_%_both": float(d["Uniquely mapped reads %"].rstrip("%"))}
+                 "star.uniquely_mapped_reads_%_both": float(d["Uniquely mapped reads %"].rstrip("%")),
+                 "exonic_fraction": assigned[i] / int(d["Uniquely mapped reads number"])}
     pheno = pd.DataFrame({"cohort": "govaere",
                           "fibrosis_stage": pd.to_numeric(meta.loc[done, "fibrosis stage"], errors="coerce").to_numpy(),
                           "nas": pd.to_numeric(meta.loc[done, "nas score"], errors="coerce").to_numpy(),
@@ -157,11 +166,18 @@ def size_factors(genes):
 
 
 def technical_covariates(qc, genes_all):
-    """recount_qc rows (index sample_id) and all AUC-scaled gene sums -> TECHNICAL covariates per sample."""
+    """
+    recount_qc rows (index sample_id) and all gene sums -> TECHNICAL covariates per sample. Exonic fraction: from
+    `qc` where given (Govaere: STAR reads assigned to genes / uniquely mapped reads), otherwise the sum of the
+    AUC-scaled recount3 gene sums / 1e9 (fraction of the base coverage in genes).
+    """
+    ef = genes_all.sum() / 1e9
+    if "exonic_fraction" in qc:
+        ef = pd.to_numeric(qc["exonic_fraction"], errors="coerce").reindex(ef.index).fillna(ef)
     return pd.DataFrame({
         "log_input_reads": np.log10(pd.to_numeric(qc["star.number_of_input_reads_both"], errors="coerce")),
         "pct_unique": pd.to_numeric(qc["star.uniquely_mapped_reads_%_both"], errors="coerce"),
-        "exonic_fraction": genes_all.sum() / 1e9,
+        "exonic_fraction": ef,
     })
 
 
@@ -233,20 +249,31 @@ def cohort_stats(expr, ncov, pheno, covars, suffix=""):
     return pd.DataFrame(res).reindex(expr.index)
 
 
-def combine(cs, weights=WEIGHTS, suffix=""):
-    """D1_chronic (weighted mean of cohort statistics), Stouffer p and BH-FDR. A fibrosis cohort without data passes
-    its weight to the other one."""
+def cohort_weights(cs, weights=WEIGHTS, suffix=""):
+    """Per feature and scored cohort: weight of its statistic (missing statistic -> 0). The fibrosis cohorts share
+    FIBROSIS_WEIGHT in proportion to the samples tested for the feature."""
+    w = pd.DataFrame(index=cs.index)
     fib = [c for c in FIBROSIS_COHORTS if f"{c}_r{suffix}" in cs]
-    if fib:
-        total = sum(weights.get(c, 0) for c in FIBROSIS_COHORTS)
-        n_fib = sum(FIBROSIS_COHORTS[c] for c in fib)
-        weights = {**weights, **{c: total * FIBROSIS_COHORTS[c] / n_fib for c in fib}}
-    cohorts = [c for c in weights if weights[c] > 0 and f"{c}_r{suffix}" in cs]
+    n = pd.DataFrame({c: cs[f"{c}_n{suffix}"].where(np.isfinite(cs[f"{c}_r{suffix}"]), 0).fillna(0) for c in fib},
+                     index=cs.index)
+    tot = n.sum(axis=1)
+    for c in fib:
+        w[c] = FIBROSIS_WEIGHT * (n[c] / tot.where(tot > 0)).fillna(0)
+    for c, wc in weights.items():
+        if wc > 0 and f"{c}_r{suffix}" in cs:
+            w[c] = np.where(np.isfinite(cs[f"{c}_r{suffix}"]), wc, 0.0)
+    return w
+
+
+def combine(cs, weights=WEIGHTS, suffix=""):
+    """D1_chronic (weighted mean of the cohort statistics, cohort_weights), Stouffer p and BH-FDR."""
+    w = cohort_weights(cs, weights, suffix)
+    cohorts = list(w.columns)
     r = cs[[f"{c}_r{suffix}" for c in cohorts]].to_numpy(float)
     p = cs[[f"{c}_p{suffix}" for c in cohorts]].to_numpy(float)
     n = cs[[f"{c}_n{suffix}" for c in cohorts]].to_numpy(float)
-    w = np.array([weights[c] for c in cohorts])
-    ok = np.isfinite(r)
+    w = w.to_numpy(float)
+    ok = np.isfinite(r) & (w > 0)
     wsum = (ok * w).sum(axis=1)
     out = pd.DataFrame(index=cs.index)
     out["D1_chronic"] = np.where(wsum > 0, np.nansum(np.where(ok, r * w, 0), axis=1) / np.where(wsum > 0, wsum, 1), np.nan)
@@ -262,14 +289,14 @@ def combine(cs, weights=WEIGHTS, suffix=""):
     return out
 
 
-def _parent_adjusted(expr, ncov, pheno, covars, log_genes, parents):
-    """Scored statistics of loci with a parent gene, with the parent's expression as an extra covariate."""
+def _parent_adjusted(expr, ncov, pheno, covars, log_genes, parents, suffix=""):
+    """Cohort statistics of loci with a parent gene, with the parent's expression as an extra covariate."""
     rows = []
     for fid, gid in parents.items():
         if fid not in expr.index or gid not in log_genes.index:
             continue
         cv = {c: z.assign(parent=log_genes.loc[gid, z.index]) for c, z in covars.items()}
-        rows.append(cohort_stats(expr.loc[[fid]], ncov.loc[[fid]], pheno, cv))
+        rows.append(cohort_stats(expr.loc[[fid]], ncov.loc[[fid]], pheno, cv, suffix=suffix))
     return pd.concat(rows) if rows else pd.DataFrame()
 
 
@@ -324,4 +351,11 @@ def d1_chronic(ncov, pheno, genes, qc, symbol_to_id, protein_coding, parents=Non
             out.loc[adj.index, adj.columns] = adj
             redo = combine(out[cs.columns])
             out[redo.columns] = redo      # FDR over all features, with the parent-adjusted statistics in place
+            # the cell-intrinsic statistics of these loci are parent-adjusted too
+            adj = _parent_adjusted(expr, ncov, pheno, cells, pg, parents[flagged], suffix="_cell")
+            cell.loc[adj.index, adj.columns] = adj
+            cc = combine(cell, suffix="_cell")
+            out["D1_chronic_cell"], out["chronic_cell_fdr"] = cc["D1_chronic"], cc["chronic_fdr"]
+            out[[c for c in cell.columns if c.endswith("_r_cell")]] = cell[[c for c in cell.columns
+                                                                            if c.endswith("_r_cell")]]
     return out, sf

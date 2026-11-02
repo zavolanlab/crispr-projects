@@ -110,6 +110,9 @@ def d5(names, aliases, cache_path, threads=4, max_aliases=5):
                     json.dump(cache, fh)
     with open(cache_path, "w") as fh:
         json.dump(cache, fh)
+    failed = [q for q in todo if q not in cache]
+    if failed:     # a missing count would score as 'no data' (0.5) instead of failing; rerun to retry these only
+        raise RuntimeError(f"{len(failed)} Europe PMC queries failed after retries (cached counts kept), e.g. {failed[0]}")
 
     rows = []
     for fid, sym in names.items():

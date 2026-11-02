@@ -20,6 +20,15 @@ def test_typical_value_is_half():
     assert scoring.percentile_vs_background([500], bg)[0] == pytest.approx(0.5)
 
 
+def test_weighted_percentile_counts_each_locus_once():
+    # locus A has three ORFs with value 1, locus B one ORF with value 3: weighted, 1 is half the background
+    bg = [1, 1, 1, 3]
+    w = scoring.locus_weights(["A", "A", "A", "B"])
+    assert w.tolist() == pytest.approx([1 / 3, 1 / 3, 1 / 3, 1])
+    assert scoring.percentile_vs_background([1, 2], bg, w).tolist() == pytest.approx([0.25, 0.5])
+    assert scoring.percentile_vs_background([1, 2], bg).tolist() == pytest.approx([0.375, 0.75])
+
+
 def test_signed_percentile_ranks_magnitude():
     pct, sign = scoring.signed_percentile_vs_background([-3, 3, 0.1], [-1, 1, 2, -2])
     assert pct[0] == pct[1] == 1.0
@@ -45,7 +54,19 @@ def test_class_scores_standardized_and_dominance():
     assert scores.loc[0, "B"] == pytest.approx(0.4)      # missing feature -> 0.5
     assert cov.loc[0, "B"] == pytest.approx(0.5)
     z = scoring.standardized(scores, np.array([True, True]))
-    assert z.mean().tolist() == pytest.approx([0.0, 0.0])
+    assert z.loc[0, "A"] > 0 > z.loc[1, "A"]
+    assert z.loc[0, "A"] == pytest.approx(-z.loc[1, "A"])
+
+
+def test_standardized_is_rank_based_and_skips_classes_without_data():
+    # class R: one rare binary feature (1 of 20 rows); class C: continuous. Rank-based standardization keeps the rare
+    # class within the range of the continuous one
+    scores = pd.DataFrame({"R": [1.0] + [0.47] * 19, "C": np.linspace(0, 1, 20)})
+    cov = pd.DataFrame({"R": [1.0] * 20, "C": [1.0] * 19 + [0.0]})
+    z = scoring.standardized(scores, np.ones(20, bool), cov)
+    assert z.loc[0, "R"] < 2.0                             # (score - mean) / SD would give 4.2
+    assert np.isnan(z.loc[19, "C"])                       # no data for C: no standardized score
+    assert z["C"].iloc[:19].median() == pytest.approx(0.0, abs=1e-9)
     z = pd.DataFrame({"A": [2.0, 0.6, -0.5], "B": [0.5, 0.3, -1.0]})
     # ahead by 1.5 SD; ahead by only 0.3; ahead by 0.5 but below the mean
     assert scoring.dominant_class(z, margin=0.5).tolist() == ["A", "none", "none"]

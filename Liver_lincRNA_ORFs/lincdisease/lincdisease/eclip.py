@@ -13,13 +13,14 @@ Supplementary Data 1): nuclear = signal in a nuclear compartment (nuclei, nucleo
 bodies) and none in a cytoplasmic one (cytoplasm, mitochondria, Golgi, P bodies, ER); cytoplasmic = the reverse.
 RBPs seen in both, or not imaged, belong to neither group (but count in the total).
 
-Statistics per feature (missing if no RBP binds it):
+Statistics per feature (enrichments missing if no RBP binds it; mechanism.features sets them to 0, no evidence,
+for loci expressed in HepG2):
   eclip_n_rbps            number of RBPs bound (all groups)
   eclip_rbps_per_kb       eclip_n_rbps per kb of quantifiable sequence
   eclip_<group>_enrichment  log2 [ ((n_group + f_group) / (n_all + 1)) / f_group ], f_group = group size / number
-                          of RBPs: over-representation of the group among the RBPs bound, with one pseudo-RBP
-                          split by the group fractions; independent of expression and length, which drive
-                          the number of RBPs bound.
+                          of RBPs: over-representation of the group among the RBPs bound, shrunk toward 0 by one
+                          pseudo-RBP split by the group fractions; 0 without binding, and the further from 0 the
+                          more RBPs support the over- or under-representation.
 """
 import gzip
 import os

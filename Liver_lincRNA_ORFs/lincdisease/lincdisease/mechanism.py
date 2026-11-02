@@ -1,6 +1,7 @@
 """
 Mechanism classes (LOGIC.md, Step 4): per-ORF features (with locus-level features copied to the locus' ORFs),
-percentiles against all ORFs of the run, class scores, standardized class scores and dominant class.
+percentiles against all ORFs of the run (each ORF weighted by 1 / number of ORFs of its locus, so that every locus
+counts once), class scores, rank-based standardized class scores and dominant class.
 
 Features computed here (higher = more support for the class; '-' marks features ranked on the negated value):
   M1  translation (pooled log10 Bayes factor), fraction of the transcript's P-sites in the ORF, specific
@@ -12,10 +13,12 @@ Features computed here (higher = more support for the class; '-' marks features 
   M3  divergent / antisense position next to a protein-coding gene, low polysome association (-MRL percentile),
       co-expression with the nearest protein-coding gene (TSS distance <= 100 kb) across TCGA-LIHC and GTEx
       liver: Spearman rho minus the median rho of protein-coding gene pairs in the same TSS-distance bin
-  M4  copy number (log2 TPM HepG2), no cis position (1 - M3 position)
+  M4  copy number (log2 TPM HepG2)
   M6  snoRNA / scaRNA / miRNA genes (GENCODE + UCSC wgRna) inside the locus span on the same strand
 ENCODE HepG2 features (encode.py): nuclear enrichment (M3, M4) and its negative (M5), eCLIP by nuclear (M4) and
-cytoplasmic (M5) RBPs; M5 has no other features. ENCODE features,
+cytoplasmic (M5) RBPs (eclip.py; loci expressed in HepG2, TPM >= ECLIP_MIN_TPM, without a bound RBP have
+enrichment 0, i.e. no evidence either way; loci not expressed in HepG2 are missing); M5 has no other features.
+ENCODE features,
 chromatin at the TSS, sequence features (TM, signal peptide, Pfam, disorder), PhyloP contrast and CRISPR
 screens enter as missing when their step has not been run; scoring.composite shrinks them to 0.5.
 """
@@ -29,11 +32,12 @@ CLASSES = {
            "m1_length", "m1_phylop_contrast_weighted", "m1_sequence_features", "m1_crispr_screen"],
     "M2": ["m2_nmd", "m2_nmd_sensitivity"],
     "M3": ["m3_neighbour_position", "m3_low_polysome", "m3_coexpression", "m3_nuclear", "m3_enhancer_chromatin"],
-    "M4": ["m4_copy_number", "m4_no_cis", "m4_nuclear", "m4_eclip_nuclear"],
+    "M4": ["m4_copy_number", "m4_nuclear", "m4_eclip_nuclear"],
     "M5": ["m5_cytoplasmic", "m5_eclip_cytoplasmic"],
     "M6": ["m6_small_rna_host"],
 }
-DOMINANCE_MARGIN = 0.5   # SD of the standardized class scores
+DOMINANCE_MARGIN = 0.5   # standard normal units of the rank-based standardized class scores
+ECLIP_MIN_TPM = 1.0      # loci below this HepG2 TPM cannot show eCLIP binding: eCLIP features missing
 DIVERGENT_DISTANCE = 5000
 NEIGHBOUR_MAX_DISTANCE = 100_000
 DISTANCE_BINS = (0, 5_000, 20_000, 50_000, 100_000)
@@ -236,15 +240,19 @@ def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=No
     nuclear = orfs["locus_id"].map(enc["nuclear_log2ratio"]).astype(float).to_numpy()
     f["m3_nuclear"] = nuclear
     f["m4_copy_number"] = num("log2TPM_HepG2")
-    f["m4_no_cis"] = 1.0 - f["m3_neighbour_position"]
     f["m4_nuclear"] = nuclear
     f["m5_cytoplasmic"] = -nuclear
     f["m6_small_rna_host"] = orfs["locus_id"].map(small_rna).to_numpy()
     locus = lambda table, col: (orfs["locus_id"].map(table[col]).astype(float).to_numpy() if table is not None
                                 else np.nan)
     f["m3_enhancer_chromatin"] = locus(chromatin, "enhancer_score")
-    f["m4_eclip_nuclear"] = locus(eclip, "eclip_nuclear_enrichment")
-    f["m5_eclip_cytoplasmic"] = locus(eclip, "eclip_cytoplasmic_enrichment")
+    # eclip.features leaves loci without a bound RBP missing; for loci expressed in HepG2 that is an observation
+    # (no RBP bound: enrichment 0 by its formula), for the others there is nothing to observe
+    expressed = (2 ** num("log2TPM_HepG2") >= ECLIP_MIN_TPM).to_numpy()
+    for feat, col in (("m4_eclip_nuclear", "eclip_nuclear_enrichment"),
+                      ("m5_eclip_cytoplasmic", "eclip_cytoplasmic_enrichment")):
+        v = locus(eclip, col)
+        f[feat] = np.where(expressed, np.nan_to_num(v, nan=0.0), np.nan) if eclip is not None else np.nan
     f["m2_nmd_sensitivity"] = locus(nmd, "nmd_log2fc")
     if peptide_feats is not None:
         pf = peptide_feats.reindex(orfs["orf_id"])
@@ -259,17 +267,20 @@ def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=No
     return f
 
 
-def class_table(feats, is_background, margin=DOMINANCE_MARGIN):
-    """Percentiles, class scores, coverage, standardized class scores (_z) and dominant class."""
+def class_table(feats, is_background, locus_ids, margin=DOMINANCE_MARGIN):
+    """Percentiles, class scores, coverage, standardized class scores (_z) and dominant class. Background ORFs are
+    weighted by 1 / number of ORFs of their locus (`locus_ids`), as locus-level features are copied to every ORF."""
+    bg = np.asarray(is_background, dtype=bool)
+    w = scoring.locus_weights(locus_ids)
     conservation = [c for c in ("m1_phylocsf", "m1_phylop_contrast") if c in feats.columns]
     cols = [c for c in feats.columns if c != "copy_attribution" and c not in conservation]
-    pct = scoring.component_percentiles(feats, feats[is_background], cols)
+    pct = scoring.component_percentiles(feats, feats[bg], cols, weights=w[bg])
     # conservation counts in proportion to the confidence that the alignment belongs to this copy
     for c in conservation:
-        p_cons = scoring.percentile_vs_background(feats[c], feats.loc[is_background, c])
+        p_cons = scoring.percentile_vs_background(feats[c], feats.loc[bg, c], w[bg])
         pct[f"{c}_weighted"] = 0.5 + (p_cons - 0.5) * feats["copy_attribution"].to_numpy()
     scores, coverage = scoring.class_scores(pct, CLASSES)
-    z = scoring.standardized(scores, np.asarray(is_background, dtype=bool))
+    z = scoring.standardized(scores, bg, coverage, w)
     out = pd.concat([pct.add_prefix("pct_"), scores.add_suffix("_score"), coverage.add_suffix("_coverage"),
                      z.add_suffix("_z")], axis=1)
     out["dominant_class"] = scoring.dominant_class(z, margin)

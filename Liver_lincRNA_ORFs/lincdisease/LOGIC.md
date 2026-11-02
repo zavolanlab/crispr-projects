@@ -17,7 +17,9 @@ specification: when the logic changes, this file is edited in place (no change l
 ## General rules
 
 1. Each component is a statistic converted to an empirical percentile among the background (signed statistics
-   are ranked on magnitude; the sign is kept separately as a direction).
+   are ranked on magnitude; the sign is kept separately as a direction). Where the background is ORFs (mechanism,
+   actionability), each ORF is weighted by 1 / number of ORFs of its locus, so that every locus counts once:
+   locus-level features are copied to all ORFs of a locus, and loci with many ORFs would otherwise dominate.
 2. Missing data never counts as zero: a score is shrunk toward 0.5 in proportion to the weight of its missing
    components, and is reported with its `coverage` (fraction of component weight with data).
 3. Quality checks produce flags and a confidence tier; they do not remove ORFs and do not change the scores.
@@ -28,8 +30,8 @@ specification: when the logic changes, this file is edited in place (no change l
 
 Flags:
 
-* overlap with segmental duplications (UCSC `genomicSuperDups`, with identity `fracMatch`) and with GRCh38 regions
-  that are falsely duplicated relative to T2T-CHM13;
+* overlap of the ORF's coding exons (not its introns) with segmental duplications (UCSC `genomicSuperDups`, with
+  identity `fracMatch`) and with GRCh38 regions that are falsely duplicated relative to T2T-CHM13;
 * peptide homology (DIAMOND blastp `--more-sensitive` against GENCODE v42 protein-coding translations and the
   UniProt human reference proteome with isoforms; hits to genes overlapping the ORF are discarded; homolog = best hit
   with E <= 1e-5 and query coverage >= 30%): parent gene, identity, query coverage, parent coverage (ORF integrity
@@ -81,16 +83,20 @@ Samples:
   untreated biopsies, HCV vs non-HCV); phenotypes from the recount3 SRA `sample_attributes`. Govaere 2020
   (GSE135251, 206 NAFLD biopsies with fibrosis stage and NAS, 10 controls; not in recount3): STAR alignment
   (GENCODE v42), loci counted in the CRAMs over the same regions (samtools bedcov), gene counts and technical
-  covariates (input reads, % uniquely mapped) from STAR, phenotypes from the GEO sample characteristics.
+  covariates (input reads, % uniquely mapped, exonic fraction = reads assigned to genes / uniquely mapped reads) from
+  STAR, phenotypes from the GEO sample characteristics.
 
 Values (`ncov`): summed coverage / number of quantifiable positions / the sample's total base coverage
-(recount3 `bc_auc.all_reads_all_bases`) x 1e9. Statistics use log2(ncov + pseudocount) (chronic disease cohorts: rescaled by gene-based size factors, see D1).
+(recount3 `bc_auc.all_reads_all_bases`) x 1e9 (Govaere: summed coverage, scaled by the gene-based size factors
+only; its statistics are within-cohort ranks). Statistics use log2(ncov + pseudocount) (chronic disease cohorts:
+rescaled by gene-based size factors, see D1). Loci flagged `tcga_quantifiable = False` are not tested in any
+expression-based statistic and stay out of its multiple-testing (BH) family.
 
 ## Step 3. Disease components (per locus)
 
 | | Component | Measure |
 |:---|:---|:---|
-| D1 | Disease-associated expression | HCC: rank-biserial correlation r of TCGA-LIHC primary tumours vs adjacent normals of the same patients (matched pairs, Wilcoxon) and of tumours vs GTEx liver (Mann-Whitney; AUC = (r+1)/2); statistic = mean of the two r (log2FC and BH-FDR reported); replication in independent HCC cohorts. Chronic liver disease: ncov rescaled by median-of-ratios size factors of the recount3 gene sums (expressed protein-coding genes, top 1% by abundance left out), because AUC scaling lets the hepatocyte transcripts that dominate liver RNA set the scale and their falling share with injury lifted 74% of loci with fibrosis; per cohort, partial rank correlation with the phenotype (ranks residualized on log input reads, % uniquely mapped reads and exonic fraction; t test with n - 2 - k df): Hoang and Govaere vs fibrosis stage (vs NAFLD activity score reported), Suppli NAFL + NASH vs normal-weight + obese, Boldanova HCV vs non-HCV; a feature detected (ncov > 0) in < 20% of a cohort's samples is not tested there; statistic = weighted mean of the scored cohort statistics (fibrosis 2/3, split between Hoang and Govaere by cohort size, 78 : 216, the whole 2/3 to one of them if the other has no data; HCV 1/3), combined p by Stouffer (signed z, weights sqrt(n)), BH-FDR. Suppli is reported, not scored: its cases differ technically from its controls (fewer uniquely mapped reads, lower exonic fraction; the 15 samples with the lowest exonic fraction are all cases), and after rescaling and adjustment 40% of loci keep p < 0.01 (median r +0.14; Hoang 9%, 0.00). Parent genes: a locus whose expression follows a parent gene (homology step; median Spearman over cohorts >= 0.5) that is itself associated with chronic disease (FDR < 0.05, same sign) is `parent_driven`, and its cohort statistics are recomputed with the parent's expression as an extra covariate (processed pseudogenes pick up reads of parents such as KRT8, KRT18, YWHAZ that rise in injured liver). Reported, not scored: `D1_chronic_cell`, the same statistic additionally adjusted for liver cell-type marker scores (hepatocyte, stellate, cholangiocyte, macrophage, lymphocyte, endothelial; MacParland et al. 2018 markers, COL1A1, KRT8, KRT18 left out), i.e. the part not explained by a change in cell mix. HCC carries 0.7 and chronic liver disease 0.3 of D1. |
+| D1 | Disease-associated expression | HCC: rank-biserial correlation r of TCGA-LIHC primary tumours vs adjacent normals of the same patients (matched pairs, Wilcoxon) and of tumours vs GTEx liver (Mann-Whitney; AUC = (r+1)/2); statistic = mean of the two r (log2FC and BH-FDR reported). Chronic liver disease: ncov rescaled by median-of-ratios size factors of the recount3 gene sums (expressed protein-coding genes, top 1% by abundance left out), because AUC scaling lets the hepatocyte transcripts that dominate liver RNA set the scale and their falling share with injury lifted 74% of loci with fibrosis; per cohort, partial rank correlation with the phenotype (ranks residualized on log input reads, % uniquely mapped reads and exonic fraction; t test with n - 2 - k df): Hoang and Govaere vs fibrosis stage (vs NAFLD activity score reported), Suppli NAFL + NASH vs normal-weight + obese, Boldanova HCV vs non-HCV; a feature detected (ncov > 0) in < 20% of a cohort's samples is not tested there; statistic = weighted mean of the scored cohort statistics, per feature (fibrosis 2/3, split between Hoang and Govaere in proportion to the samples tested for the feature, the whole 2/3 to one of them if the other has no statistic; HCV 1/3; a feature with only fibrosis or only HCV statistics takes that part alone), combined p by Stouffer (signed z, weights sqrt(n)), BH-FDR. Suppli is reported, not scored: its cases differ technically from its controls (fewer uniquely mapped reads, lower exonic fraction; the 15 samples with the lowest exonic fraction are all cases), and after rescaling and adjustment 40% of loci keep p < 0.01 (median r +0.14; Hoang 9%, 0.00). Parent genes: a locus whose expression follows a parent gene (homology step; median Spearman over cohorts >= 0.5) that is itself associated with chronic disease (FDR < 0.05, same sign) is `parent_driven`, and its cohort statistics, scored and cell-intrinsic, are recomputed with the parent's expression as an extra covariate (processed pseudogenes pick up reads of parents such as KRT8, KRT18, YWHAZ that rise in injured liver); the parent genes' own association is BH-corrected over the parent genes tested. Reported, not scored: `D1_chronic_cell`, the same statistic additionally adjusted for liver cell-type marker scores (hepatocyte, stellate, cholangiocyte, macrophage, lymphocyte, endothelial; MacParland et al. 2018 markers, COL1A1, KRT8, KRT18 left out), i.e. the part not explained by a change in cell mix. HCC carries 0.7 and chronic liver disease 0.3 of D1. |
 | D2 | Prognosis | Cox models of overall survival and progression-free interval in TCGA-LIHC (TCGA-CDR endpoints; one primary tumour per patient) on standardized expression, adjusted for age and stage (I-II vs III-IV); loci expressed in < 20% of tumours are not tested; statistic = mean Wald z of OS and PFI (HR per SD and BH-FDR reported) |
 | D3 | Somatic genome | TCGA-LIHC primary tumours (GDC GRCh38 data from the UCSC Xena GDC hub). Copy number: masked CN segment value (log2 ratio) at the midpoint of the locus span; Spearman rho of CN vs expression; gain / loss frequency (> +0.3 / < -0.3). Methylation: 450K probes within -1500..+500 nt of the TSS of the dominant isoform (loci: highest TPM in HepG2/Huh7; GENCODE controls: Ensembl canonical transcript; windows around every isoform TSS would pull gene-body probes of long multi-isoform genes into the promoter), mean beta per sample; Spearman rho of beta vs expression; delta_beta = median beta in adjacent normals - median in tumours. Signed parts: d3_cn = max(rho_CN, 0) x (gain - loss frequency); d3_meth = max(-rho_meth, 0) x clip(delta_beta / 0.2, -1, 1); statistic = the part with the larger magnitude. Both rho are partial Spearman correlations adjusted for tumour purity (ABSOLUTE, TCGA PanCanAtlas; rank residuals after linear regression on purity rank, tumours with a purity call), as non-tumour cells shift expression, CN amplitude and methylation together; unadjusted rho are reported. In-ORF mutations are reported but not scored (exome capture barely covers lincRNAs). |
 | D4 | Germline genetics | GWAS Catalog associations with whitelisted liver traits (EFO labels of HCC, MASLD/MASH, liver fibrosis, cirrhosis, alcoholic liver disease, viral hepatitis, ...; ALT, AST, GGT) within the locus span +- 50 kb (LD-window proxy); statistic = largest -log10 p (0 without association), reported per trait class (disease / enzyme). GTEx v8 liver eQTLs for loci with GENCODE genes (v26 ids without version): eGene q < 0.05, lead variant, and a link to a whitelisted GWAS hit if a significant eQTL variant is the hit or the lead eQTL lies within 10 kb (distance proxy, no LD panel); reported (`D4.eqtl.tsv`, `D4_eqtl_supported`), not scored, as only annotated loci can have GTEx eQTLs |
@@ -122,14 +128,17 @@ count for both; statistic log2(1 + papers). Directions: `hcc_direction` from D1 
 `disease_direction`); `chronic_direction` from D1 chronic (up / down with disease, percentile >= 0.75).
 
 **Actionability score** (per ORF, separate from the disease score): equal-weight composite of the percentiles
-(among all ORFs) of tumour-specific expression of the locus (median in TCGA-LIHC primary tumours minus the
+(among all ORFs, locus-weighted) of tumour-specific expression of the locus (median in TCGA-LIHC primary tumours minus the
 largest median over GTEx tissues except testis), predicted HLA class I presentation (MHCflurry 2 presentation
 percentile <= 2, distinct 8-11-mer binders over HepG2 A*02:01, A*24:02, B*35:14, B*51:01, C*04:01, C*16:02, Huh7
-A*11:01, B*54:01, C*01:02 (Cellosaurus) and 16 common alleles, each scored on its own), and the number of lincORF-specific HLA-I immunopeptides (`lincorfz` notebook section 7.3).
+A*11:01, B*54:01, C*01:02 (Cellosaurus) and 16 common alleles, each scored on its own; peptides that also occur in
+an annotated protein, GENCODE v42 translations or UniProt human with isoforms, are self-peptides and are left out),
+and the number of lincORF-specific HLA-I immunopeptides (`lincorfz` notebook section 7.3).
 
 ## Step 4. Mechanism classes (per ORF, with locus-level features)
 
-Features are ranked against all ORFs of the run; locus-level features are copied to every ORF of the locus.
+Features are ranked against all ORFs of the run, each ORF weighted by 1 / number of ORFs of its locus; locus-level
+features are copied to every ORF of the locus.
 ENCODE HepG2 features use stranded data, so they are measured on the exons of the feature minus the exons of other
 GENCODE genes on the same strand only (`quant/regions.tsv` also removes antisense exons, which unstranded RNA-seq
 needs but stranded data do not). Fractionation uses stranded signal bigWigs of uniquely mapped reads (two
@@ -139,20 +148,25 @@ HepG2 eCLIP (M4, M5): reproducible (IDR) peaks of 105 RBPs (ENCODE), log2 fold e
 on the locus strand. RBP groups by HepG2 immunofluorescence (Van Nostrand et al. 2020, Suppl. Data 1): nuclear =
 only nuclear compartments (17 RBPs), cytoplasmic = only cytoplasmic compartments (15); RBPs seen in both (61) or not
 imaged (12) count only in the total. Statistic per group: log2[((n_group + f) / (n_bound + 1)) / f], f = the group's
-share of the 105 RBPs (over-representation among the bound RBPs, independent of expression and length); missing if
-no RBP binds.
+share of the 105 RBPs (over-representation among the bound RBPs, shrunk toward 0 by one pseudo-RBP: 0 without
+binding, further from 0 the more RBPs support it); loci expressed in HepG2 (TPM >= 1) without a bound RBP have 0, no
+evidence either way; loci not expressed in HepG2 are missing.
 Each class has an absolute evidence score (mean of its feature percentiles, missing features counting 0.5) and a
-standardized score z = (score - mean) / SD over all ORFs of the run, per class: classes with few or binary features
-have a wider score distribution, and comparing raw scores would let them win by their spread alone. Classes are not
-mutually exclusive; a class is called dominant only if its z is > 0 and exceeds the next class's z by >= 0.5.
+rank-based standardized score z, per class: the standard normal quantile of the percentile of the class score among
+the ORFs of the run that have data for the class (locus-weighted). Classes are compared on z, because their raw
+scores have different spreads (few or binary features give wide ones); the rank transform maps the top of every
+class to the same quantiles, so that a class with one rare binary feature cannot win by its spread alone. An ORF
+without data for a class (coverage 0) has no z for it, and that class does not compete. Classes are not mutually
+exclusive; a class is called dominant only if its z is > 0 (above the median) and exceeds the next class's z by
+>= 0.5.
 
 | Class | Features |
 |:---|:---|
 | M1 Encoded peptide | Translation strength (pooled log10 Bayes factor) and fraction of the transcript's P-sites in the ORF (`lincorfz`); identified peptides (proteomics peptides absent from canonical proteins, plus lincORF-specific immunopeptides); independent translation evidence: same stop codon as an ORF of the GENCODE Ribo-seq ORF catalog (phase 2 comprehensive, v45), +1 if it matches a phase 1 ORF with peptide support; PhyloCSF weighted by copy-attribution confidence (0.5 + (percentile - 0.5) x confidence); ORF vs non-ORF exon conservation: mean PhyloP100way over the ORF minus the mean over the exonic positions of its transcript outside the ORF, both restricted to the locus' quantifiable positions (Step 2: exons of other GENCODE genes on either strand removed, as PhyloP is strand-blind and antisense coding exons or miRNA hairpins would lend their conservation to the ORF; missing with < 30 ORF or < 30 other positions), weighted by copy-attribution confidence like PhyloCSF; length; sequence features = 0.5 x [Kyte-Doolittle TM segment (19-aa window mean >= 1.6), signal-peptide-like N-terminus (heuristic: hydrophobic 8-mer, mean >= 2.0 without D/E/K/R, starting at residues 2-20, small residues at -3/-1 of a cleavage site <= 40; open predictors only, SignalP/TMHMM are licensed), or Pfam-A domain (hmmsearch, gathering thresholds)] + 0.5 x (1 - fraction of residues disordered, metapredict >= 0.5). Published CRISPR knock-out screens, matched by the same stop codon: (a) Prensner et al. 2021 (553 non-canonical ORFs; primary screen in 8 cell lines including HepG2, secondary tiling screen of the hits): 2 = viability phenotype specific to the ORF (secondary screen: specific to the ORF, or to the ORF and one other transcript region), 1 = phenotype not resolved by the secondary screen, 0 = no phenotype or a phenotype attributed to the transcript, the genomic region or an adjacent coding gene; the HepG2 median sgRNA log2 fold change is reported. (b) Chen et al. 2020 (~2,300 ORFs, K562 and iPSC; coordinates lifted from hg19 with the UCSC chain): 1 = hit in either cell line, 0 = screened without a hit. Their hit calls are not in the supplementary tables, and their stated null (non-targeting sgRNAs) makes nearly every ORF significant, because Cas9 cutting alone costs a phenotype of about -0.015 (their estimate); hits are re-called as BH-FDR < 0.05 in a one-sided Mann-Whitney test of the ORF's sgRNA phenotypes against the non-targeting sgRNAs shifted by -0.015, and a top-3 sgRNA phenotype <= -0.02 (808 hits in either cell line, 146 in both; the paper reports 401 in both, so the re-call is stricter). Feature: Prensner's secondary-screen verdict where it exists (the only test of ORF specificity), otherwise the larger of the two values; missing if neither screen tested the ORF. |
-| M2 Translation-coupled RNA regulation | Stop codon > 50 nt upstream of the last exon junction (NMD substrate); NMD sensitivity: up-regulation upon NMD inhibition in HeLa (Colombo et al. 2017, GSE86148 / recount3 SRP083135; quantified like TCGA/GTEx over the locus' quantifiable positions, ncov scaled by median-of-ratios size factors of the protein-coding gene sums; mean of the log2 fold changes of the UPF1 knock-down and the SMG6 + SMG7 double knock-down, 3 replicates each, vs 6 scrambled controls; Welch t-test, BH-FDR; missing if the locus is detected in < 50% of the 12 samples) |
+| M2 Translation-coupled RNA regulation | Stop codon > 50 nt upstream of the last exon junction (NMD substrate); NMD sensitivity: up-regulation upon NMD inhibition in HeLa (Colombo et al. 2017, GSE86148 / recount3 SRP083135; quantified like TCGA/GTEx over the locus' quantifiable positions, ncov scaled by median-of-ratios size factors of the protein-coding gene sums; mean of the log2 fold changes of the UPF1 knock-down and the SMG6 + SMG7 double knock-down, 3 replicates each, vs 6 scrambled controls; t test of this contrast in a linear model with the three conditions (residual variance pooled within conditions, 9 df), BH-FDR; missing if the locus is detected in < 50% of the 12 samples) |
 | M3 Cis-regulation of a neighbour (RNA or DNA element) | Divergent (head-to-head, TSSs within 5 kb) or antisense (exon overlap) position next to a protein-coding gene; co-expression with the nearest protein-coding gene (TSS distance <= 100 kb, either strand; recount3 gene sums) across TCGA-LIHC and GTEx liver: Spearman rho minus the median rho of nearest protein-coding gene pairs in the same TSS-distance bin (0-5, 5-20, 20-50, 50-100 kb); nuclear enrichment (ENCODE HepG2 fractionation); enhancer-like chromatin at the dominant TSS in HepG2 (highest-TPM isoform for loci, Ensembl canonical for controls; ENCODE fold change over control, mean over TSS +- 1 kb; H3K27ac ENCFF795ONN, H3K4me1 ENCFF576YVM, H3K4me3 ENCFF284FVP): log2((H3K4me1 + 1) / (H3K4me3 + 1)) at active TSSs (H3K27ac >= 2-fold), inactive TSSs ranked lowest; low polysome association (low isoform MRL percentile) |
-| M4 Trans-acting RNA, nuclear | Nuclear enrichment; high copy number (HepG2 TPM); HepG2 eCLIP binding by nuclear RBPs (see above); no cis signature |
-| M5 Trans-acting RNA, cytoplasmic | Cytoplasmic enrichment; HepG2 eCLIP binding by cytoplasmic RBPs. M5 is therefore informative only for loci with HepG2 fractionation or eCLIP data (about a third of the ORFs); elsewhere it is 0.5 with coverage 0. |
+| M4 Trans-acting RNA, nuclear | Nuclear enrichment; high copy number (HepG2 TPM); HepG2 eCLIP binding by nuclear RBPs (see above) |
+| M5 Trans-acting RNA, cytoplasmic | Cytoplasmic enrichment; HepG2 eCLIP binding by cytoplasmic RBPs. Loci not expressed in HepG2 and without fractionation data have no M5 data (coverage 0). |
 | M6 Small-RNA host | snoRNA, scaRNA or miRNA genes within the locus span on the same strand (GENCODE plus UCSC wgRna, as GENCODE lacks e.g. the GAS5 snoRNAs); snoRNA-host-gene features |
 
 ## Step 5. Positive controls and tests
@@ -182,7 +196,8 @@ Controls are processed by the same code as the candidates (added as extra loci/O
 
 Disease and actionability controls are scored as GENCODE genes (`ctrl:<gene>`, union of GENCODE exons) against
 the lincRNA background; mechanism controls are scored through their `lincorfz` locus (best-ranked ORF), so
-controls that are not lincRNA loci of the run (MTLN, SPAAR) cannot be evaluated for M1. `controls.tsv` lists every
+controls that are not lincRNA loci of the run (MTLN, SPAAR) cannot be evaluated for M1; "top class" is the class
+with the highest standardized score z. `controls.tsv` lists every
 expectation with its value and pass / fail / not evaluated.
 
 MEG3 is imprinted and, in TCGA-LIHC tumours, positively correlated with the methylation of its canonical promoter (rho 0.37 after purity adjustment), so its expectation, derived from cell lines and small cohorts, does not hold in this cohort; it stays in the panel as a reported failure. GSTP1 was chosen after this was seen, as the only one of five classic HCC methylation markers (CDKN2A, RASSF1, APC, SFRP1, GSTP1) anticorrelated with expression; it shows that the statistic detects methylation silencing, not a pre-registered expectation.

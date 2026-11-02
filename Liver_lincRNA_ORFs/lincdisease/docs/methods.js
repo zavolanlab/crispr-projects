@@ -115,6 +115,10 @@ C.push(p("so ties count one half and *p* lies in [0, 1]. Missing values stay mis
   "(D1 HCC, D1 chronic, D2, D3) are ranked on their magnitude, *p* = *p*_{|B|}(|*x*|), and the sign " +
   "*s* = sgn(*x*) is kept separately to give a direction (Section 2.3): a locus strongly down in tumours is as " +
   "disease-relevant as one strongly up."));
+C.push(p("Where the background is ORFs (mechanism classes, actionability), background ORF *i* carries the weight " +
+  "*ω*_{i} = 1 / (number of ORFs of its locus), and the counts in Equation 1 become sums of weights over the total " +
+  "weight. Every locus thus counts once: locus-level features are copied to all ORFs of a locus, and loci with many " +
+  "ORFs would otherwise dominate the background."));
 
 C.push(h2("2.2 Composite scores and shrinkage for missing data"));
 C.push(p("A composite of components *k* with fixed non-negative weights *w*_{k} and percentiles *p*_{k} is the " +
@@ -157,7 +161,8 @@ C.push(p("Samples: TCGA-LIHC (424 samples: 371 primary tumours, one per patient,
   "206 NAFLD biopsies with fibrosis stage and NAFLD activity score, 10 controls), is not in recount3: its reads " +
   "were aligned with STAR 2.7.11b to GRCh38 / GENCODE v42, the loci counted in the alignments over the same " +
   "regions (samtools bedcov), and gene counts (reverse-stranded library) and technical covariates taken from " +
-  "STAR; phenotypes come from the GEO sample characteristics."));
+  "STAR; phenotypes come from the GEO sample characteristics. Loci flagged `tcga_quantifiable = False` are not " +
+  "tested in any expression-based statistic and are not part of its BH family."));
 
 // 4
 C.push(h1("4. Disease components D1-D6 (per locus)"));
@@ -187,15 +192,16 @@ C.push(p("with the *s*_{j} rescaled to geometric mean 1 per cohort."));
 C.push(p("**Per-cohort statistic.** A partial rank correlation of expression with the phenotype *y* (Hoang, Govaere: " +
   "fibrosis stage; Suppli: NAFL + NASH = 1 vs normal-weight + obese = 0; Boldanova: HCV = 1 vs non-HCV = 0), " +
   "adjusted for *k* = 3 technical covariates (log10 input reads, % uniquely mapped reads, exonic fraction = " +
-  "sum of gene sums / 10^9). With *X* = [1, ranks of the covariates] and the hat matrix *H* = *XX*⁺, the ranks " +
+  "sum of the AUC-scaled gene sums / 10^9 in recount3, reads assigned to genes / uniquely mapped reads in Govaere). With *X* = [1, ranks of the covariates] and the hat matrix *H* = *XX*⁺, the ranks " +
   "of expression and phenotype are residualized (residuals *u*, *v*) and correlated:"));
 C.push(eq(R("u = (I − H) rank(e),    v = (I − H) rank(y),    r = "), F(R("u · v"), [R("‖u‖ ‖v‖")])));
 C.push(eq(R("t = r "), Sqrt(F(R("n − 2 − k"), [R("1 − "), Sup(R("r"), R("2"))])), R(",    p = 2 "), Sub(R("P"), R("t(n−2−k)")), R("(T > |t|)")));
 C.push(p("A feature detected (ncov > 0) in < 20% of a cohort's samples is not tested in that cohort. The NAFLD " +
   "activity score association (Hoang, Govaere) is reported."));
-C.push(p("**Combination.** Over the scored cohorts *c* with a statistic (weights *w*_{hoang} = 2/3 × 78/294, " +
-  "*w*_{govaere} = 2/3 × 216/294, the whole 2/3 to one fibrosis cohort if the other has no data; *w*_{hcv} = 1/3, " +
-  "*w*_{suppli} = 0):"));
+C.push(p("**Combination.** Per feature, over the scored cohorts *c* with a statistic, with weights *w*_{hcv} = 1/3, " +
+  "*w*_{suppli} = 0 and, for the fibrosis cohorts, *w*_{c} = 2/3 × *n*_{c} / (*n*_{hoang} + *n*_{govaere}), *n*_{c} " +
+  "being the samples tested for the feature (*n*_{c} = 0 without a statistic, so that the whole 2/3 goes to the " +
+  "other cohort):"));
 C.push(eq(Sub(R("D1"), R("chronic")), R(" = "), F(Sum(R("c"), null, [Sub(R("w"), R("c")), Sub(R("r"), R("c"))]), Sum(R("c"), null, Sub(R("w"), R("c")))),
   R(",    "), Sub(R("z"), R("c")), R(" = sgn("), Sub(R("r"), R("c")), R(") "), Sup(R("Φ"), R("−1")), Par([R("1 − "), F(Sub(R("p"), R("c")), R("2"))]),
   R(",    Z = "), F(Sum(R("c"), null, [Sqrt(Sub(R("n"), R("c"))), Sub(R("z"), R("c"))]), Sqrt(Sum(R("c"), null, Sub(R("n"), R("c")))))));
@@ -207,8 +213,8 @@ C.push(p("**Parent genes.** Processed pseudogene loci can pick up reads of their
   "YWHAZ), which rise in injured liver. Let *g* be the homology parent of the locus (best DIAMOND hit, Section 6) " +
   "and ρ the median over cohorts of the Spearman correlation between locus and parent expression. The locus is " +
   "`parent_driven` if ρ ≥ 0.5, the parent itself is associated with chronic disease (FDR < 0.05) and the signs " +
-  "agree; its cohort statistics are then recomputed with the parent's expression as a (*k* + 1)th covariate, and " +
-  "the FDR is recomputed over all features. The threshold 0.5 was set after a first threshold of 0.8 missed " +
+  "agree (parent FDR over the parent genes tested); its cohort statistics, scored and cell-intrinsic, are then " +
+  "recomputed with the parent's expression as a (*k* + 1)th covariate, and the FDR is recomputed over all features. The threshold 0.5 was set after a first threshold of 0.8 missed " +
   "YWHAZP2/3 (ρ ≈ 0.6)."));
 C.push(p("**Cell-intrinsic statistic (reported, not scored).** `D1_chronic_cell` repeats the computation with the " +
   "liver cell-type marker scores as extra covariates (mean z-score of log expression of MacParland et al. 2018 " +
@@ -285,9 +291,10 @@ C.push(p("Directions: `disease_direction` from D1 HCC, D1 chronic, D2 and D3; `h
 C.push(p("**Actionability** (per ORF). Tumour specificity = median *e* in TCGA-LIHC primary tumours − max over " +
   "GTEx tissues except testis of the median *e*. Predicted HLA class I presentation: number of distinct 8-11-mer " +
   "peptides of the ORF with an MHCflurry 2 presentation percentile ≤ 2 for any of the HepG2 (A*02:01, A*24:02, " +
-  "B*35:14, B*51:01, C*04:01, C*16:02), Huh7 (A*11:01, B*54:01, C*01:02; Cellosaurus) or 16 common alleles. " +
-  "Identified peptides: lincORF-specific HLA-I immunopeptides (lincorfz immunopeptidomics). Percentiles are " +
-  "taken among all ORFs."));
+  "B*35:14, B*51:01, C*04:01, C*16:02), Huh7 (A*11:01, B*54:01, C*01:02; Cellosaurus) or 16 common alleles, " +
+  "leaving out self-peptides, those that also occur in an annotated protein (GENCODE v42 translations, UniProt " +
+  "human with isoforms), to which T cells are tolerant. Identified peptides: lincORF-specific HLA-I " +
+  "immunopeptides (lincorfz immunopeptidomics). Percentiles are taken among all ORFs, locus-weighted (Section 2.1)."));
 C.push(p("**Fitted weights (reported, not used).** Non-negative logistic regression of literature labels on the " +
   "component percentiles gave `disease_score_fitted`. The fit puts 0.82 on D3 because established lncRNAs " +
   "carry more 450K promoter probes (an ascertainment effect: probe count alone gives AUC 0.81), so the default " +
@@ -295,7 +302,7 @@ C.push(p("**Fitted weights (reported, not used).** Non-negative logistic regress
 
 // 6
 C.push(h1("6. Quality checks and copy attribution (per ORF)"));
-C.push(p("**Flags.** Overlap with segmental duplications (UCSC genomicSuperDups, identity `fracMatch`) or with " +
+C.push(p("**Flags.** Overlap of the ORF's coding exons with segmental duplications (UCSC genomicSuperDups, identity `fracMatch`) or with " +
   "GRCh38 regions falsely duplicated relative to T2T-CHM13; peptide homology (DIAMOND blastp --more-sensitive " +
   "against GENCODE v42 translations and the UniProt human reference proteome; hits to genes overlapping the ORF " +
   "discarded; homolog = best hit with E ≤ 1e-5 and query coverage ≥ 30%); the lincorfz flags antisense to " +
@@ -315,13 +322,16 @@ C.push(p("**Confidence tier**: `likely_artefact` = duplicated or homologous with
 
 // 7
 C.push(h1("7. Mechanism classes M1-M6 (per ORF)"));
-C.push(p("Each feature is converted to a percentile among all 11,910 ORFs (locus features copied to every ORF of " +
-  "the locus). The **class score** is the equal-weight composite (Equation 2) of its feature percentiles, so " +
-  "missing features count 0.5. Classes with few or binary features have a wider score distribution, so classes " +
-  "are compared on **standardized scores**, *z*_{k} = (*S*_{k} − mean_{k}) / sd_{k}, with mean and standard " +
-  "deviation of class *k* over all ORFs. The **dominant class** is the class with the largest *z* if *z* > 0 and " +
-  "it exceeds the second largest by ≥ 0.5, else none. Classes are not mutually exclusive: the scores are " +
-  "absolute evidence, the *z* relative to the other ORFs."));
+C.push(p("Each feature is converted to a percentile among all 11,910 ORFs, locus-weighted (Section 2.1; locus " +
+  "features are copied to every ORF of the locus). The **class score** *S*_{k} is the equal-weight composite " +
+  "(Equation 2) of its feature percentiles, so missing features count 0.5. Raw class scores have different " +
+  "spreads (few or binary features give wide ones), so classes are compared on **rank-based standardized " +
+  "scores**, *z*_{k} = Φ^{−1}(*p*_{k}(*S*_{k})), with *p*_{k} the locus-weighted percentile of the class score " +
+  "among the ORFs with data for class *k* (coverage > 0), clipped to [1/2*N*, 1 − 1/2*N*]. The top of every class " +
+  "maps to the same quantiles, so a class with one rare binary feature cannot win by its spread alone; an ORF " +
+  "without data for a class has no *z* for it. The **dominant class** is the class with the largest *z* if " +
+  "*z* > 0 and it exceeds the second largest by ≥ 0.5, else none. Classes are not mutually exclusive: the scores " +
+  "are absolute evidence, the *z* relative to the other ORFs."));
 C.push(p("Conservation features are weighted by the copy-attribution confidence *a*, so that conservation counts " +
   "only as far as the alignment can be attributed to this copy:"));
 C.push(eq(Sub(R("p"), R("w")), R(" = 0.5 + ("), Sub(R("p"), R("cons")), R(" − 0.5) · a")));
@@ -329,8 +339,8 @@ C.push(table(["Class", "Features (each one percentile)"], [
   ["M1 Encoded peptide", "translation strength (pooled log10 Bayes factor, lincorfz); fraction of the transcript's P-sites in the ORF; identified peptides (proteomics peptides absent from canonical proteins + lincORF-specific immunopeptides); independent translation (same stop as a GENCODE Ribo-seq ORF, +1 with phase 1 peptide support); PhyloCSF, *a*-weighted; ORF − non-ORF exon PhyloP100way mean over quantifiable positions (≥ 30 positions each), *a*-weighted; length (aa); sequence features = 0.5 · [TM segment, signal-like N-terminus or Pfam-A domain] + 0.5 · (1 − disordered fraction, metapredict); CRISPR screen value (Section 8)"],
   ["M2 Translation-coupled RNA regulation", "NMD substrate (stop > 50 nt upstream of the last exon junction); NMD sensitivity (below)"],
   ["M3 Cis-regulation of a neighbour", "divergent (TSSs ≤ 5 kb, head-to-head) or antisense position to a protein-coding gene; co-expression excess with the nearest protein-coding gene (≤ 100 kb): Spearman ρ over TCGA-LIHC + GTEx liver minus the median ρ of nearest protein-coding pairs in the same distance bin (0-5, 5-20, 20-50, 50-100 kb); nuclear enrichment; enhancer-like TSS chromatin, log2((H3K4me1 + 1)/(H3K4me3 + 1)) at active TSSs (H3K27ac ≥ 2-fold; inactive lowest); low polysome association (−MRL percentile)"],
-  ["M4 Trans-acting RNA, nuclear", "nuclear enrichment; copy number (log2 TPM HepG2); eCLIP enrichment of nuclear RBPs; no cis signature (1 − neighbour position)"],
-  ["M5 Trans-acting RNA, cytoplasmic", "cytoplasmic enrichment (−nuclear); eCLIP enrichment of cytoplasmic RBPs; informative only where HepG2 fractionation or eCLIP data exist (otherwise 0.5, coverage 0)"],
+  ["M4 Trans-acting RNA, nuclear", "nuclear enrichment; copy number (log2 TPM HepG2); eCLIP enrichment of nuclear RBPs"],
+  ["M5 Trans-acting RNA, cytoplasmic", "cytoplasmic enrichment (−nuclear); eCLIP enrichment of cytoplasmic RBPs; no data (coverage 0) for loci not expressed in HepG2 and without fractionation data"],
   ["M6 Small-RNA host", "number of snoRNA, scaRNA or miRNA genes within the locus span on the same strand (GENCODE + UCSC wgRna)"],
 ], [1.4, 5]));
 C.push(gap());
@@ -340,16 +350,20 @@ C.push(p("**ENCODE HepG2 features** use stranded data, measured on the exons of 
   "(IDR) peaks of 105 RBPs on the locus strand with log2 enrichment ≥ 3 and −log10 p ≥ 3; RBPs grouped by " +
   "immunofluorescence (Van Nostrand et al. 2020) into nuclear-only (17) and cytoplasmic-only (15). For group *G* " +
   "with share *f*_{G} of the 105 RBPs, *n*_{G} bound RBPs of the group and *n* bound RBPs in total:"));
-C.push(eq(Sub(R("E"), R("G")), R(" = "), Sub(R("log"), R("2")), Sq(F(F([Sub(R("n"), R("G")), R(" + "), Sub(R("f"), R("G"))], R("n + 1")), Sub(R("f"), R("G")))), R(",   missing if n = 0")));
-C.push(p("an over-representation of the group among the bound RBPs that does not grow with expression or length."));
+C.push(eq(Sub(R("E"), R("G")), R(" = "), Sub(R("log"), R("2")), Sq(F(F([Sub(R("n"), R("G")), R(" + "), Sub(R("f"), R("G"))], R("n + 1")), Sub(R("f"), R("G"))))));
+C.push(p("the over-representation of the group among the bound RBPs, shrunk toward 0 by one pseudo-RBP split by " +
+  "the group shares: *E*_{G} = 0 without binding, and the further from 0 the more RBPs support it. Loci expressed " +
+  "in HepG2 (TPM ≥ 1) without a bound RBP thus have *E*_{G} = 0 (no evidence either way); loci not expressed in " +
+  "HepG2 are missing."));
 C.push(p("**NMD sensitivity** is measured in the HeLa knock-downs of Colombo et al. 2017 (recount3 SRP083135): " +
   "6 scrambled-shRNA controls, UPF1 knock-down and SMG6 + SMG7 double knock-down (3 replicates each). Loci are " +
   "quantified as in Section 3, and *ncov* is divided by median-of-ratios size factors of the protein-coding gene " +
   "sums (Equation 8). With *ē*_{c} the mean of log2(*ncov*/*s* + 0.05) over the samples of condition *c*:"));
 C.push(eq(R("NMD = "), F([Par([Sub(R("ē"), R("UPF1")), R(" − "), Sub(R("ē"), R("ctrl"))]), R(" + "),
   Par([Sub(R("ē"), R("SMG6+7")), R(" − "), Sub(R("ē"), R("ctrl"))])], R("2"))));
-C.push(p("(> 0: up when NMD is inhibited), with a Welch t-test of the six knock-down against the six control " +
-  "samples (BH-FDR); missing for loci detected in < 50% of the samples. Known NMD targets rise as expected " +
+C.push(p("(> 0: up when NMD is inhibited), tested as this contrast in a linear model with the three conditions " +
+  "(t test with the residual variance pooled within conditions, 12 − 3 df, so that a difference between the two " +
+  "knock-downs does not inflate the variance; BH-FDR); missing for loci detected in < 50% of the samples. Known NMD targets rise as expected " +
   "(ATF4 +1.4, GADD45B +2.0, GAS5 +1.3, ZFAS1 +2.0 log2), and loci with a predicted NMD-substrate ORF rise more " +
   "than the others (median +0.41 vs −0.60, Mann-Whitney p = 2 × 10⁻⁸⁶)."));
 
@@ -381,14 +395,14 @@ C.push(table(["Score", "Control", "Expectation", "Result"], [
   ["D5", "HULC; LINC01090", "high; no LINC01089 papers credited", "pass, pass"],
   ["D6", "HNF1A-AS1", "liver-specific (D6 ≥ 0.75)", "fail"],
   ["disease / HCC score", "HULC, H19", "> 90th percentile of the background", "fail, fail"],
-  ["chronic score", "COL1A1, PNPLA3, TM6SF2", "> 90th percentile", "pass, fail (0.69 vs 0.71), pass"],
+  ["chronic score", "COL1A1, PNPLA3, TM6SF2", "> 90th percentile", "pass, fail (0.57 vs 0.71), pass"],
   ["actionability", "GPC3 (FVGEFFTDV, HLA-A*02:01)", "tumour-specific; presentation percentile ≤ 2", "pass, pass"],
-  ["M1", "MTLN, SPAAR", "top class", "not evaluable (not lincorfz loci)"],
+  ["M1", "MTLN, SPAAR", "top class (highest *z*)", "not evaluable (not lincorfz loci)"],
   ["M2", "GAS5, ZFAS1", "M2 score ≥ 0.6", "pass, pass"],
-  ["M3", "HNF1A-AS1, LINC00261", "top class", "pass, fail"],
-  ["M4", "MALAT1, NEAT1", "top class", "pass, fail"],
+  ["M3", "HNF1A-AS1, LINC00261", "top class", "pass, pass"],
+  ["M4", "MALAT1, NEAT1", "top class", "pass, pass"],
   ["M5", "NORAD", "top class", "pass"],
-  ["M6", "SNHG1, MIR22HG", "top class", "pass, pass"],
+  ["M6", "SNHG1, MIR22HG", "top class", "pass, fail (M4 first)"],
 ], [1.2, 1.7, 1.9, 2.2]));
 C.push(gap());
 

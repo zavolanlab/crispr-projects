@@ -77,6 +77,24 @@ def test_hla_summarize():
     assert f.loc["short", "hla_any_n_binders"] == 0 and np.isnan(f.loc["short", "hla_HepG2_best_pct"])
 
 
+def test_hla_self_peptides_left_out():
+    seqs = pd.Series({"a": "MKTAYIAKQRQ"})
+    proteins = {"XXMKTAYIAKQYY", "QQQQQQQQ"}
+    found = hla.self_peptides(seqs, proteins)
+    assert found == {"MKTAYIAK", "KTAYIAKQ", "MKTAYIAKQ"}   # R is not in the protein
+    pred = pd.DataFrame({"sequence_name": ["a", "a"], "sample_name": ["HepG2", "HepG2"],
+                         "peptide": ["MKTAYIAK", "KTAYIAKQR"], "presentation_percentile": [0.1, 1.0]})
+    s = hla.summarize(pred, hla.samples()[1], self_peps=found)
+    assert s.loc["a", "hla_any_n_binders"] == 1 and s.loc["a", "hla_n_self_binders"] == 1
+    assert s.loc["a", "hla_HepG2_best_pct"] == pytest.approx(1.0)
+
+
+def test_read_proteins(tmp_path):
+    p = tmp_path / "p.fa"
+    p.write_text(">a\nMKT\nAYI\n>b\nMKTAYI\n>c\nQQ\n")
+    assert hla.read_proteins([str(p)]) == {"MKTAYI", "QQ"}
+
+
 def test_conservation_contrast(tmp_path):
     pyBigWig = pytest.importorskip("pyBigWig")
     bw_path = str(tmp_path / "p.bw")

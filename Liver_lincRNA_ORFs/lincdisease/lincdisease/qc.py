@@ -24,13 +24,27 @@ def _as_bool(series):
     return series.astype(str).str.lower().isin(["true", "1", "yes"])
 
 
+def orf_exon_blocks(orfs):
+    """One row per coding exon block of each ORF (index = ORF index; chrom, orf_start0, orf_end1), from the lincorfz
+    `orf_blocks` ('start0-end1;...'); ORFs without blocks keep their span."""
+    if "orf_blocks" not in orfs:
+        return orfs[["chrom", "orf_start0", "orf_end1"]]
+    rows = []
+    for idx, chrom, blocks, s0, e1 in zip(orfs.index, orfs["chrom"], orfs["orf_blocks"], orfs["orf_start0"],
+                                          orfs["orf_end1"]):
+        parts = [b.split("-") for b in str(blocks).split(";") if "-" in b] if isinstance(blocks, str) else []
+        rows += [(idx, chrom, int(a), int(b)) for a, b in parts] or [(idx, chrom, s0, e1)]
+    return pd.DataFrame(rows, columns=["idx", "chrom", "orf_start0", "orf_end1"]).set_index("idx")
+
+
 def interval_overlap_max(orfs, regions, value_col):
     """
-    For each ORF span (chrom, orf_start0, orf_end1) the maximum `value_col` of overlapping regions
-    (chrom, start0, end1), NaN without overlap. Strand is ignored (duplications are copy-level).
+    For each ORF the maximum `value_col` of regions (chrom, start0, end1) overlapping its coding exons (introns of
+    multi-exon ORFs do not count), NaN without overlap. Strand is ignored (duplications are copy-level).
     """
     out = pd.Series(np.nan, index=orfs.index, dtype=float)
-    for chrom, sub in orfs.groupby("chrom"):
+    blocks = orf_exon_blocks(orfs)
+    for chrom, sub in blocks.groupby("chrom"):
         reg = regions[regions["chrom"] == chrom]
         if reg.empty:
             continue
@@ -44,7 +58,7 @@ def interval_overlap_max(orfs, regions, value_col):
             k = np.searchsorted(rs, e, side="left")
             hit = re_[:k] > s
             if hit.any():
-                out[idx] = rv[:k][hit].max()
+                out[idx] = np.nanmax([out[idx], rv[:k][hit].max()])
     return out
 
 

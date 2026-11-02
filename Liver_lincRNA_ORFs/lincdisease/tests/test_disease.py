@@ -66,3 +66,15 @@ def test_d2_hazard_direction():
     assert res.loc["risk", "HR_OS"] > 2
     assert res.loc["risk", "D2"] > 5
     assert abs(res.loc["null", "D2"]) < 3
+
+
+def test_disease_coverage_counts_missing_subcomponents():
+    from lincdisease import integrate
+    rng = np.random.default_rng(1)
+    stats = pd.DataFrame(rng.normal(size=(50, 9)), columns=["D1_HCC", "D1_chronic", "D2", "D3", "D4", "D5",
+                                                           "gtex_liver_median", "liver_specificity",
+                                                           "cell_line_log2TPM"])
+    stats.loc[0, "D1_chronic"] = np.nan                     # 0.3 of D1 (weight 0.25) missing
+    res = integrate.disease_score(stats, pd.Series(True, index=stats.index))
+    assert res.loc[0, "disease_coverage"] == pytest.approx(1 - 0.25 * 0.3)
+    assert res.loc[1, "disease_coverage"] == pytest.approx(1.0)

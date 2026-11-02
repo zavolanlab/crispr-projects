@@ -55,27 +55,38 @@ def disease_score(stats, is_background, weights=DISEASE_WEIGHTS, d1_weights=D1_W
     pct = pct.drop(columns=sign_cols)
 
     comp = pd.DataFrame(index=stats.index)
+    part_cov = {}     # coverage of the sub-composites, so that a missing part of D1 / D6 counts against coverage
     d1 = scoring.composite(pct.reindex(columns=list(d1_weights)), d1_weights)
     comp["D1"] = d1["score"].where(d1["coverage"] > 0)
+    part_cov["D1"] = d1["coverage"]
     d6_parts = [c for c in ("gtex_liver_median", "liver_specificity", "cell_line_log2TPM") if c in pct]
     if d6_parts:
         d6 = scoring.composite(pct[d6_parts], dict.fromkeys(d6_parts, 1.0))
         comp["D6"] = d6["score"].where(d6["coverage"] > 0)
+        part_cov["D6"] = d6["coverage"]
     for c in ("D2", "D3", "D4", "D5"):
         comp[c] = pct[c] if c in pct else np.nan
 
     for c in ("D1_HCC", "D1_chronic", "D4_hcc", "D4_chronic", "D5_hcc", "D5_chronic"):
         comp[c] = pct[c] if c in pct else np.nan
 
+    have = comp.notna().astype(float)
+    for c, cv in part_cov.items():
+        have[c] = cv
+
+    def coverage(w):
+        w = pd.Series(w, dtype=float)
+        return (have.reindex(columns=w.index).fillna(0) * w).sum(axis=1) / w.sum()
+
     res = scoring.composite(comp, weights)
     no5 = {k: v for k, v in weights.items() if k != "D5"}
     out = pd.concat([pct.add_prefix("pct_"), comp.add_prefix("comp_")], axis=1)
     out["disease_score"] = res["score"]
-    out["disease_coverage"] = res["coverage"]
+    out["disease_coverage"] = coverage(weights)
     out["disease_score_noD5"] = scoring.composite(comp, no5)["score"]
     for name, w in (("hcc", HCC_WEIGHTS), ("chronic", CHRONIC_WEIGHTS)):
         r = scoring.composite(comp, w)
-        out[f"{name}_score"], out[f"{name}_coverage"] = r["score"], r["coverage"]
+        out[f"{name}_score"], out[f"{name}_coverage"] = r["score"], coverage(w)
     dir_cols = [c for c in SIGNED if c in signs]
     out["disease_direction"] = scoring.consensus_direction(pct[dir_cols], signs[dir_cols], DIRECTION_MIN_PERCENTILE,
                                                            labels=("oncogene-like", "suppressor-like"))

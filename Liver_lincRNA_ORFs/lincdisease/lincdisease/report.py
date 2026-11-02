@@ -3,7 +3,8 @@ Final tables (LOGIC.md, "Outputs") and the control panel check (Step 5).
 
 Per ORF: QC flags and tier, copy-attribution confidence, the locus' disease components and score, the
 actionability score, mechanism class scores, standardized class scores and dominant class.
-Actionability (per ORF) = equal-weight composite of the percentiles (among all ORFs) of the locus' tumour
+Actionability (per ORF) = equal-weight composite of the percentiles (among all ORFs, each weighted by 1 / number
+of ORFs of its locus) of the locus' tumour
 specificity, the number of lincORF-specific HLA-I peptides and predicted HLA-I binding (missing until MHCflurry
 presentation (MHCflurry, distinct binder peptides over the HepG2, Huh7 and common alleles).
 """
@@ -21,7 +22,7 @@ def actionability(orfs, disease_loci, peptides, hla_table=None):
     f["n_hla_specific"] = orfs["orf_id"].map(peptides["n_hla_specific"]).fillna(0).to_numpy()
     f["hla_binding"] = (orfs["orf_id"].map(hla_table["hla_any_n_binders"]).astype(float).to_numpy()
                         if hla_table is not None else np.nan)
-    pct = scoring.component_percentiles(f, f, ACTIONABILITY)
+    pct = scoring.component_percentiles(f, f, ACTIONABILITY, weights=scoring.locus_weights(orfs["locus_id"]))
     res = scoring.composite(pct, dict.fromkeys(ACTIONABILITY, 1.0))
     return pd.concat([f.add_prefix("act_"), pct.add_prefix("act_pct_"),
                       res.rename(columns={"score": "actionability_score", "coverage": "actionability_coverage"})],
@@ -34,7 +35,9 @@ def orf_table(orfs, qc_table, disease_loci, mech, act):
                     "chronic_direction",
                     "comp_D1", "comp_D2", "comp_D3", "comp_D4", "comp_D5", "comp_D6",
                     "log2FC_paired", "fdr_paired", "auc_vs_gtex", "fdr_vs_gtex",
-                    "stat_D1_chronic", "chronic_fdr", "hoang_r", "hoang_p", "suppli_r", "suppli_p", "hcv_r", "hcv_p",
+                    "stat_D1_chronic", "chronic_fdr", "hoang_r", "hoang_p", "govaere_r", "govaere_p", "suppli_r",
+                    "suppli_p",
+                    "hcv_r", "hcv_p",
                     "D1_chronic_cell", "chronic_cell_fdr", "parent_gene", "parent_rho", "parent_driven",
                     "HR_OS", "fdr_OS", "HR_PFI",
                     "fdr_PFI", "gwas_top_trait", "gwas_top_snp", "gwas_disease_max", "gwas_enzyme_max",
@@ -138,8 +141,9 @@ def control_report(disease_loci, mech_by_locus_name, hla_control=None):
                 rows.append(_row(gene, cls, "not a lincorfz locus", "top class" if cls != "M2" else "high", None))
                 continue
             sc = mech_by_locus_name.loc[gene, [f"{c}_score" for c in classes]].astype(float)
-            top = classes[int(np.argmax(sc.to_numpy()))]
-            val = f"{cls} {sc[f'{cls}_score']:.2f}; top {top}"
+            z = mech_by_locus_name.loc[gene, [f"{c}_z" for c in classes]].astype(float)
+            top = classes[int(np.nanargmax(z.to_numpy()))]       # classes are compared on standardized scores
+            val = f"{cls} {sc[f'{cls}_score']:.2f} (z {z[f'{cls}_z']:.2f}); top {top}"
             ok = sc[f"{cls}_score"] >= 0.6 if cls == "M2" else top == cls
             rows.append(_row(gene, cls, val, "top class" if cls != "M2" else "high (>= 0.6)", ok))
     return pd.DataFrame(rows)

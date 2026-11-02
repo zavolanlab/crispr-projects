@@ -36,3 +36,16 @@ def test_size_factors_remove_sample_depth():
     a = nmd.sensitivity(ncov, samples, genes, pseudocount=0.0001)
     b = nmd.sensitivity(ncov2, samples, genes2, pseudocount=0.0001)
     assert b.loc["target", "nmd_log2fc"] == pytest.approx(a.loc["target", "nmd_log2fc"], abs=1e-3)
+
+
+def test_contrast_variance_is_within_conditions():
+    # UPF1 up 8-fold, SMG6/7 up 2-fold, small noise within conditions: the knock-down difference must not enter the
+    # variance (a pooled two-group test would see a bimodal 'inhibited' group)
+    sid = [f"s{i}" for i in range(12)]
+    cond = ["control"] * 6 + ["UPF1_kd"] * 3 + ["SMG6_SMG7_kd"] * 3
+    noise = np.array([1.0, 1.02, 0.98, 1.01, 0.99, 1.0, 1.0, 1.02, 0.98, 1.0, 1.02, 0.98])
+    ncov = pd.DataFrame([noise * np.array([1] * 6 + [8] * 3 + [2] * 3)], index=["x"], columns=sid)
+    genes = pd.DataFrame(np.full((50, 12), 100.0), columns=sid)
+    res = nmd.sensitivity(ncov, pd.DataFrame({"sample_id": sid, "condition": cond}), genes, pseudocount=1e-6)
+    assert res.loc["x", "nmd_log2fc"] == pytest.approx(2.0, abs=0.02)
+    assert res.loc["x", "nmd_p"] < 1e-8

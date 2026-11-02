@@ -166,7 +166,7 @@ def read_chen(d, chain):
     out["blocks"] = [[(int(e) - 3, int(e))] if s == "+" else [(int(e), int(e) + 3)] if s == "-" else []
                      for e, s in zip(end, out["strand"])]
     out = out[out["chrom"].notna()].reset_index(drop=True)
-    out["value"] = (out["K562_hit"].astype(bool) | out["iPSC_hit"].fillna(False).astype(bool)).astype(float)
+    out["value"] = (out["K562_hit"].fillna(False).astype(bool) | out["iPSC_hit"].fillna(False).astype(bool)).astype(float)
     return out
 
 

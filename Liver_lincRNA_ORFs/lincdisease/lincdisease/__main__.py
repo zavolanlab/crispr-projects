@@ -111,8 +111,13 @@ def cmd_peptide(args):
     if args.skip_hla:
         return
     menv = {"MHCFLURRY_DATA_DIR": os.path.join(args.data_dir, "mhcflurry")}
-    res = hla.run(orfs, os.path.join(env, "python"), os.path.join(args.out_dir, "hla.orfs.tsv"), env=menv)
-    print(f"HLA: ORFs with >= 1 binder {(res['hla_any_n_binders'] > 0).sum()} of {len(res)}")
+    hd = os.path.join(args.data_dir, "homology")
+    proteins = [os.path.join(hd, f) for f in ("gencode.v42.pc_translations.fa.gz", "UP000005640_9606.fasta.gz",
+                                              "UP000005640_9606_additional.fasta.gz")]
+    res = hla.run(orfs, os.path.join(env, "python"), os.path.join(args.out_dir, "hla.orfs.tsv"), env=menv,
+                  protein_fastas=proteins)
+    print(f"HLA: ORFs with >= 1 non-self binder {(res['hla_any_n_binders'] > 0).sum()} of {len(res)}; "
+          f"self-peptide binders left out: {res['hla_n_self_binders'].sum()}")
 
 
 def cmd_support(args):
@@ -205,7 +210,8 @@ def cmd_chronic(args):
     feats = pd.read_csv(os.path.join(args.out_dir, "quant", "features.tsv"), sep="\t", index_col=0)
     samples = pd.read_csv(os.path.join(d, "samples.tsv"), sep="\t")
     samples = samples[samples["sample_id"].isin(sums["sample_id"])]
-    ncov = quant.normalize(sums, feats, samples)
+    # loci that cannot be measured in unstranded RNA-seq are not tested (and stay out of the BH family)
+    ncov = quant.normalize(sums, feats, samples).loc[lambda x: x.index.isin(quantifiable(feats))]
     genes = pd.concat([quant.read_gene_sums(resources.fetch(f"sra_{p}_genes", args.data_dir,
                                                             url=quant.gene_sums_url("sra", p)), "sra", samples)
                        for p in chronic.COHORTS.values()], axis=1)
@@ -224,6 +230,9 @@ def cmd_chronic(args):
     if args.govaere_dir:
         g_ncov, g_genes, g_qc, g_pheno = chronic.govaere(args.govaere_dir, args.govaere_runs, args.govaere_soft)
         print(f"Govaere: {len(g_pheno)} runs")
+        missing = ncov.index.difference(g_ncov.index)
+        if len(missing):
+            raise ValueError(f"Govaere locus_cov files lack {len(missing)} features; recompute them")
         ncov = pd.concat([ncov, g_ncov.reindex(ncov.index)], axis=1)
         genes = pd.concat([genes, g_genes], axis=1)
         qc = pd.concat([qc, g_qc])
@@ -232,8 +241,7 @@ def cmd_chronic(args):
                                  genes, qc, symbol_to_id, gtf.loc[gtf["gene_type"] == "protein_coding", "gene_id"],
                                  parents=parents, pseudocount=args.pseudocount)
     sf.rename("size_factor").to_csv(os.path.join(d, "size_factors.tsv"), sep="\t", index_label="sample_id")
-    unq = ~feats["quantifiable"].reindex(res.index).fillna(False).astype(bool)
-    res.loc[unq, "D1_chronic"] = float("nan")
+    res = res.reindex(feats.index)
     path = os.path.join(args.out_dir, "D1.chronic.tsv")
     res.to_csv(path, sep="\t", index_label="feature_id")
     print(f"wrote {path}; tested {res['D1_chronic'].notna().sum()}, FDR < 0.05: {(res['chronic_fdr'] < 0.05).sum()}, "
@@ -251,14 +259,13 @@ def cmd_nmd(args):
     feats = pd.read_csv(os.path.join(args.out_dir, "quant", "features.tsv"), sep="\t", index_col=0)
     samples = pd.read_csv(os.path.join(d, "samples.tsv"), sep="\t")
     samples = samples[samples["sample_id"].isin(sums["sample_id"])]
-    ncov = quant.normalize(sums, feats, samples)
+    ncov = quant.normalize(sums, feats, samples).loc[lambda x: x.index.isin(quantifiable(feats))]
     genes = quant.read_gene_sums(resources.fetch(f"sra_{nmd.PROJECT}_genes", args.data_dir,
                                                  url=quant.gene_sums_url("sra", nmd.PROJECT)), "sra", samples)
     gtf = quant.read_gtf_exons(resources.fetch("gencode_gtf", args.data_dir)).drop_duplicates("gene_id")
     pc = gtf.loc[gtf["gene_type"] == "protein_coding", "gene_id"].str.split(".").str[0]
     res = nmd.sensitivity(ncov, samples, genes[genes.index.isin(pc)], pseudocount=args.pseudocount)
-    unq = ~feats["quantifiable"].reindex(res.index).fillna(False).astype(bool)
-    res.loc[unq, ["log2fc_UPF1_kd", "log2fc_SMG6_SMG7_kd", "nmd_log2fc", "nmd_p", "nmd_fdr"]] = float("nan")
+    res = res.reindex(feats.index)
     path = os.path.join(args.out_dir, "nmd.loci.tsv")
     res.to_csv(path, sep="\t", index_label="feature_id")
     print(f"wrote {path}; tested {res['nmd_log2fc'].notna().sum()}, up at FDR < 0.05: "
@@ -271,7 +278,7 @@ def cmd_literature(args):
     res = literature.d5(names, aliases, os.path.join(args.data_dir, "europepmc_counts.json"), threads=args.threads)
     path = os.path.join(args.out_dir, "D5.literature.tsv")
     res.to_csv(path, sep="\t", index_label="feature_id")
-    print(f"wrote {path}; features with queries failing: {res['n_liver'].isna().sum()}")
+    print(f"wrote {path}")
 
 
 def cmd_genetics(args):
@@ -321,10 +328,10 @@ def cmd_somatic(args):
     pb = somatic.promoter_beta(beta, probes)
     pb["n_probes"] = pd.Series({f: len(p) for f, p in probes.items()})
     purity = somatic.read_purity(resources.fetch("tcga_purity", args.data_dir))
-    res = somatic.d3(expr, samples, cn, pb.drop(columns="n_probes"), purity=purity)
+    q = quantifiable(feats)
+    res = somatic.d3(expr.loc[expr.index.isin(q)], samples, cn, pb.drop(columns="n_probes"), purity=purity)
+    res = res.reindex(feats.index)
     res["meth_n_probes"] = pb["n_probes"].reindex(res.index).fillna(0).astype(int)
-    unq = ~feats["quantifiable"].reindex(res.index).fillna(False).astype(bool)
-    res.loc[unq, ["d3_cn", "d3_meth", "D3"]] = float("nan")
     path = os.path.join(args.out_dir, "D3.somatic.tsv")
     res.to_csv(path, sep="\t", index_label="feature_id")
     print(f"wrote {path}; CN tested {res['cn_rho'].notna().sum()}, methylation tested {res['meth_rho'].notna().sum()}")
@@ -440,7 +447,7 @@ def cmd_mechanism(args):
                                orf_support=pd.read_csv(os.path.join(args.out_dir, "support.orfs.tsv"), sep="\t",
                                                        index_col=0),
                                nmd=pd.read_csv(os.path.join(args.out_dir, "nmd.loci.tsv"), sep="\t", index_col=0))
-    res = mechanism.class_table(feats, pd.Series(True, index=orfs.index))
+    res = mechanism.class_table(feats, pd.Series(True, index=orfs.index), orfs["locus_id"])
     out = pd.concat([orfs[["orf_id", "orf_label", "locus_id", "locus_name", "is_candidate"]],
                      feats.add_prefix("raw_"), res], axis=1)
     path = os.path.join(args.out_dir, "mechanism.orfs.tsv")
@@ -463,6 +470,11 @@ def read_sums(quant_dir):
     return sums.reset_index()
 
 
+def quantifiable(feats):
+    """Features measurable in unstranded public RNA-seq (Step 2); the others are not tested."""
+    return feats.index[feats["quantifiable"].fillna(False).astype(bool)]
+
+
 def load_expression(out_dir, pseudocount):
     d = os.path.join(out_dir, "quant")
     sums = read_sums(d)
@@ -480,8 +492,9 @@ def cmd_disease(args):
     print(samples.groupby(["source", "project"]).size().to_string())
     cdr = pd.read_excel(resources.fetch("tcga_cdr", args.data_dir), sheet_name=0)
 
-    d1 = disease.d1_hcc(expr, samples)
-    d2 = disease.d2_survival(expr, samples, cdr, ncov=ncov)
+    q = expr.index.isin(quantifiable(feats))
+    d1 = disease.d1_hcc(expr.loc[q], samples)
+    d2 = disease.d2_survival(expr.loc[q], samples, cdr, ncov=ncov.loc[q])
     cell = loci[["log2TPM_HepG2", "log2TPM_Huh7"]].astype(float).max(axis=1)
     d6 = integrate.liver_context(expr, samples, cell)
     d4 = pd.read_csv(os.path.join(args.out_dir, "D4.gwas.tsv"), sep="\t", index_col=0)

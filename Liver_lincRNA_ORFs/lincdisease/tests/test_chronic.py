@@ -56,11 +56,31 @@ def test_d1_chronic_direction_and_combination():
 
 def test_combine_missing_cohort_renormalizes():
     cs = pd.DataFrame({"hoang_r": [0.4, np.nan], "hoang_p": [0.01, np.nan], "hoang_n": [50, np.nan],
-                       "suppli_r": [0.2, 0.6], "suppli_p": [0.2, 0.01], "suppli_n": [40, 40]}, index=["a", "b"])
-    out = chronic.combine(cs, weights={"hoang": 0.5, "suppli": 0.25})
-    assert np.isclose(out.loc["a", "D1_chronic"], (0.5 * 0.4 + 0.25 * 0.2) / 0.75)
+                       "hcv_r": [0.2, 0.6], "hcv_p": [0.2, 0.01], "hcv_n": [28, 28]}, index=["a", "b"])
+    out = chronic.combine(cs)
+    assert np.isclose(out.loc["a", "D1_chronic"], 2 / 3 * 0.4 + 1 / 3 * 0.2)
     assert np.isclose(out.loc["b", "D1_chronic"], 0.6)
     assert out.loc["b", "chronic_n_cohorts"] == 1
+
+
+def test_fibrosis_split_follows_samples_tested_per_feature():
+    # a: both fibrosis cohorts tested (78 and 68 samples); b: govaere only (hoang below the detection filter)
+    cs = pd.DataFrame({"hoang_r": [0.3, np.nan], "hoang_p": [0.01, np.nan], "hoang_n": [78, np.nan],
+                       "govaere_r": [0.1, 0.2], "govaere_p": [0.2, 0.05], "govaere_n": [68, 68],
+                       "hcv_r": [0.0, 0.0], "hcv_p": [1.0, 1.0], "hcv_n": [28, 28]}, index=["a", "b"])
+    w = chronic.cohort_weights(cs)
+    assert np.isclose(w.loc["a", "hoang"], 2 / 3 * 78 / 146) and np.isclose(w.loc["a", "govaere"], 2 / 3 * 68 / 146)
+    assert np.isclose(w.loc["b", "govaere"], 2 / 3) and w.loc["b", "hoang"] == 0
+    out = chronic.combine(cs)
+    assert np.isclose(out.loc["b", "D1_chronic"], 2 / 3 * 0.2)
+
+
+def test_technical_covariates_use_star_exonic_fraction():
+    qc = pd.DataFrame({"star.number_of_input_reads_both": [1e7, 2e7], "star.uniquely_mapped_reads_%_both": [90, 85],
+                       "exonic_fraction": [np.nan, 0.6]}, index=["sra:x", "govaere:y"])
+    genes = pd.DataFrame({"sra:x": [3e8, 2e8], "govaere:y": [5e6, 4e6]})     # AUC-scaled sums vs raw counts
+    t = chronic.technical_covariates(qc, genes)
+    assert np.isclose(t.loc["sra:x", "exonic_fraction"], 0.5) and np.isclose(t.loc["govaere:y", "exonic_fraction"], 0.6)
 
 
 def test_combine_skips_zero_weight_cohorts():

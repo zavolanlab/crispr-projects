@@ -32,6 +32,15 @@ def test_interval_overlap_max_handles_nesting():
     assert m[3] == pytest.approx(0.995)          # nested region, larger value
 
 
+def test_interval_overlap_ignores_orf_introns():
+    # a two-exon ORF whose intron (7000-7900) contains a duplication, and one whose second exon overlaps it
+    o = pd.DataFrame({"chrom": "chr1", "orf_start0": [6900, 6900], "orf_end1": [8000, 8000],
+                      "orf_blocks": ["6900-7000;7900-8000", "6900-7000;7400-7500"]})
+    dup = pd.DataFrame({"chrom": ["chr1"], "start0": [7200], "end1": [7600], "fracMatch": [0.97]})
+    m = qc.interval_overlap_max(o, dup, "fracMatch")
+    assert np.isnan(m[0]) and m[1] == pytest.approx(0.97)
+
+
 def test_tiers():
     o = _orfs()
     res = qc.run_qc(o, segdups=SEGDUPS, copy_peptides=pd.Series({"artefact_with_peptide": True}))

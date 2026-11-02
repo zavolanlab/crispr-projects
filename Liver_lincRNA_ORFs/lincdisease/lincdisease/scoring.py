@@ -3,53 +3,63 @@ Scoring arithmetic shared by all disease, actionability and mechanism scores (LO
 
 * every component is a statistic turned into an empirical percentile among the background loci/ORFs
   (mid-rank: ties count one half); signed statistics are ranked on their magnitude and the sign is kept
-  separately as a direction;
+  separately as a direction; background members can carry weights (ORFs: 1 / number of ORFs of their locus, so
+  that every locus counts once);
 * a composite score is the weighted mean of its component percentiles where missing components contribute
   0.5 (no evidence either way), so the score is shrunk toward 0.5 in proportion to the missing weight;
   `coverage` is the fraction of the weight with data;
-* a mechanism class score is the composite of its feature percentiles with equal weights; its relative share
-  is the score divided by the sum over classes.
+* a mechanism class score is the composite of its feature percentiles with equal weights; classes are compared
+  on rank-based standardized scores (normal quantile of the class score's percentile among the background).
 """
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 NEUTRAL = 0.5
 
 
-def percentile_vs_background(values, background):
-    """Mid-rank empirical percentile of each value among the non-missing background values (NaN stays NaN)."""
-    bg = np.sort(np.asarray(pd.Series(background, dtype=float).dropna()))
+def percentile_vs_background(values, background, weights=None):
+    """Mid-rank empirical percentile of each value among the non-missing background values (NaN stays NaN).
+    `weights` (aligned with `background`): weight of each background value (default 1)."""
+    bg = pd.Series(background, dtype=float).reset_index(drop=True)
+    w = (pd.Series(1.0, index=bg.index) if weights is None
+         else pd.Series(np.asarray(weights, dtype=float), index=bg.index))
+    keep = bg.notna() & w.gt(0)
+    bg, w = bg[keep].to_numpy(), w[keep].to_numpy()
     x = np.asarray(pd.Series(values, dtype=float))
     out = np.full(x.shape, np.nan)
     if bg.size == 0:
         return out
+    order = np.argsort(bg, kind="stable")
+    bg, w = bg[order], w[order]
+    cw = np.concatenate([[0.0], np.cumsum(w)])
     ok = ~np.isnan(x)
-    below = np.searchsorted(bg, x[ok], side="left")
-    upto = np.searchsorted(bg, x[ok], side="right")
-    out[ok] = (below + 0.5 * (upto - below)) / bg.size
+    below = cw[np.searchsorted(bg, x[ok], side="left")]
+    upto = cw[np.searchsorted(bg, x[ok], side="right")]
+    out[ok] = (below + 0.5 * (upto - below)) / cw[-1]
     return out
 
 
-def signed_percentile_vs_background(values, background):
+def signed_percentile_vs_background(values, background, weights=None):
     """Percentile of |value| among |background| and the sign (+1, -1, 0; NaN if missing)."""
     x = pd.Series(values, dtype=float)
-    pct = percentile_vs_background(x.abs(), pd.Series(background, dtype=float).abs())
+    pct = percentile_vs_background(x.abs(), pd.Series(background, dtype=float).abs(), weights)
     return pct, np.sign(np.asarray(x))
 
 
-def component_percentiles(table, background, columns, signed=()):
+def component_percentiles(table, background, columns, signed=(), weights=None):
     """
-    Percentiles of `columns` of `table` against the same columns of `background`.
+    Percentiles of `columns` of `table` against the same columns of `background` (rows weighted by `weights`).
     Columns listed in `signed` are ranked on magnitude; their signs are returned as '<col>_sign'.
     """
     out = pd.DataFrame(index=table.index)
     for col in columns:
         if col in signed:
-            pct, sign = signed_percentile_vs_background(table[col], background[col])
+            pct, sign = signed_percentile_vs_background(table[col], background[col], weights)
             out[col] = pct
             out[f"{col}_sign"] = sign
         else:
-            out[col] = percentile_vs_background(table[col], background[col])
+            out[col] = percentile_vs_background(table[col], background[col], weights)
     return out
 
 
@@ -82,16 +92,39 @@ def class_scores(features, classes):
     return pd.DataFrame(scores), pd.DataFrame(coverage)
 
 
-def standardized(scores, background):
-    """Class scores in standard deviations from the background mean, per class, so that classes with few or
-    coarse features (wider spread) do not win the comparison between classes by their spread alone."""
-    ref = scores[background]
-    return (scores - ref.mean()) / ref.std()
+def locus_weights(locus_ids):
+    """1 / number of rows of the same locus: every locus has total weight 1."""
+    ids = pd.Series(np.asarray(locus_ids))
+    return (1.0 / ids.map(ids.value_counts())).to_numpy()
+
+
+def standardized(scores, background, coverage=None, weights=None):
+    """
+    Rank-based standardized class scores: the normal quantile of each class score's mid-rank percentile among the
+    background (weighted by `weights`), per class. Unlike (score - mean) / SD, a class with few or binary features
+    cannot reach extreme values by its spread alone: the top of every class maps to the same quantiles. Rows whose
+    class `coverage` is 0 (no data for the class) get no standardized score for it, and the background of the class
+    is the rows with data.
+    """
+    background = np.asarray(background, dtype=bool)
+    w = np.ones(len(scores)) if weights is None else np.asarray(weights, dtype=float)
+    out = pd.DataFrame(index=scores.index, columns=scores.columns, dtype=float)
+    for c in scores.columns:
+        s = scores[c].astype(float)
+        if coverage is not None:
+            s = s.where(coverage[c] > 0)
+        ref = background & s.notna().to_numpy()
+        n = ref.sum()
+        if not n:
+            continue
+        pct = percentile_vs_background(s, s[ref], w[ref])
+        out[c] = stats.norm.ppf(np.clip(pct, 0.5 / n, 1 - 0.5 / n))
+    return out
 
 
 def dominant_class(z, margin):
-    """Top class if its standardized score is above the background mean (> 0) and exceeds the second one by
-    >= `margin` SD, else 'none'."""
+    """Top class if its standardized score is above the background median (> 0) and exceeds the second one by
+    >= `margin` (standard normal units), else 'none'. Classes without a score (no data) do not compete."""
     def pick(row):
         r = row.dropna().sort_values(ascending=False)
         if r.empty or r.iloc[0] <= 0:

@@ -97,7 +97,7 @@ def signal_like(seq, h_window=8, h_threshold=2.0, h_start_max=20, max_cleavage=4
     s = seq.rstrip("*")
     h = hydropathy(s[:h_start_max + h_window], h_window)
     for i in np.flatnonzero(h >= h_threshold):
-        if i < 1 or set(s[i:i + h_window]) & set("DEKR"):
+        if i < 1 or i >= h_start_max or set(s[i:i + h_window]) & set("DEKR"):    # starts at residues 2-20
             continue
         h_end = i + h_window                 # 0-based index after the h-region
         for c in range(h_end + 3, min(h_end + 13, max_cleavage + 1, len(s))):
