@@ -59,7 +59,7 @@ rule govaere_align:
             counts=f"{GD}/counts/{{run}}.ReadsPerGene.tsv", star_log=f"{GD}/star_logs/{{run}}.Log.final.out",
             sj=f"{GD}/star_logs/{{run}}.SJ.out.tab", ok=f"{GD}/cram/{{run}}.ok"
     threads: 8
-    resources: mem_mb=48000, runtime=240
+    resources: mem_mb=64000, runtime=240     # 48 GB ran out of memory on some runs
     priority: 10          # align what is on disk before downloading more
     log: f"{GD}/logs/align/{{run}}.log"
     shell:

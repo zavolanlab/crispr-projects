@@ -8,8 +8,7 @@ Features computed here (higher = more support for the class; '-' marks features 
       PhyloCSF and ORF vs non-ORF exon PhyloP contrast, both weighted by copy-attribution confidence, ORF
       length, hits of published CRISPR screens (screens.py)
   M2  NMD substrate (stop codon > 50 nt upstream of the last exon junction), NMD sensitivity (up-regulation upon
-      UPF1 or SMG6 + SMG7 knock-down in HeLa, nmd.py), number of other translated ORFs (evidence moderate/strong)
-      on the locus
+      UPF1 or SMG6 + SMG7 knock-down in HeLa, nmd.py)
   M3  divergent / antisense position next to a protein-coding gene, low polysome association (-MRL percentile),
       co-expression with the nearest protein-coding gene (TSS distance <= 100 kb) across TCGA-LIHC and GTEx
       liver: Spearman rho minus the median rho of protein-coding gene pairs in the same TSS-distance bin
@@ -28,7 +27,7 @@ from . import quant, scoring
 CLASSES = {
     "M1": ["m1_translation", "m1_orf_share", "m1_peptides", "m1_independent_translation", "m1_phylocsf_weighted",
            "m1_length", "m1_phylop_contrast_weighted", "m1_sequence_features", "m1_crispr_screen"],
-    "M2": ["m2_nmd", "m2_nmd_sensitivity", "m2_other_translated_orfs"],
+    "M2": ["m2_nmd", "m2_nmd_sensitivity"],
     "M3": ["m3_neighbour_position", "m3_low_polysome", "m3_coexpression", "m3_nuclear", "m3_enhancer_chromatin"],
     "M4": ["m4_copy_number", "m4_no_cis", "m4_nuclear", "m4_eclip_nuclear"],
     "M5": ["m5_cytoplasmic", "m5_eclip_cytoplasmic"],
@@ -230,9 +229,6 @@ def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=No
     f["copy_attribution"] = qc_table["copy_attribution"].to_numpy()
     f["m1_length"] = num("n_aa")
     f["m2_nmd"] = (stop_dist > 50).astype(float).where(stop_dist.notna())
-    translated = orfs["ribo_evidence"].isin(["moderate", "strong"])
-    per_locus = translated.groupby(orfs["locus_id"]).transform("sum")
-    f["m2_other_translated_orfs"] = (per_locus - translated.astype(int)).astype(float)
     f["m3_neighbour_position"] = orfs["locus_id"].map(position).to_numpy()
     f["m3_low_polysome"] = -num("MRL_pct_vs_mRNA")
     f["m3_coexpression"] = orfs["locus_id"].map(coexpr).to_numpy() if coexpr is not None else np.nan

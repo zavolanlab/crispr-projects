@@ -75,7 +75,10 @@ with an index of the scores), `lincdisease.candidates.tsv`, `lincdisease.orfs.ts
 - The recount3 streaming (`quant`, `quant_sra`) appends one row per sample. An interrupted run keeps what it
   has, and a rerun fetches only the missing samples. Done markers are in `<out_dir>/flags/`.
 - Govaere: the FASTQ files are temporary. Snakemake deletes them once their CRAM passes the completeness check
-  (`cram/<run>.ok`). A download waits while `max_fastq_gb` of FASTQ is on disk.
+  (`cram/<run>.ok`). A download waits while `max_fastq_gb` of FASTQ is on disk. The coverage of the quantified
+  loci in the finished CRAMs (`<govaere dir>/locus_cov/<run>.tsv`, used by section 3.7 of the notebook
+  `Liver_lincRNA_ORFs_disease.ipynb`) comes from `scripts/govaere_locus_cov.sh`, submitted with `sbatch`; it skips
+  runs already done, so it can be resubmitted as more runs finish.
 
 ## Software
 Snakemake 9.27.1 with the cluster-generic executor 1.0.9, in its own environment

@@ -34,7 +34,8 @@ cd "$OUT"   # Slurm jobs start in the submission directory
 SMK=(snakemake --config "root=$ROOT" --snakefile "$HERE/workflow/Snakefile" --profile "$HERE/workflow/profile"
      --cluster-generic-status-cmd "$HERE/workflow/scripts/slurm_status.sh")
 smk() { "${SMK[@]}" "$@"; }
-running() { [ -s "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
+# the pid file may outlive the login session and its pid be reused: check that the process is Snakemake
+running() { [ -s "$PIDFILE" ] && tr '\0' ' ' < "/proc/$(cat "$PIDFILE")/cmdline" 2>/dev/null | grep -q snakemake; }
 start() {
   if running; then echo "already running (pid $(cat "$PIDFILE")); see run.sh status"; exit 1; fi
   log=$LOGS/$(date +%Y%m%d_%H%M%S).log

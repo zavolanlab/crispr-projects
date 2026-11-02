@@ -128,7 +128,6 @@ COLUMNS = [
         ("m1_crispr_screen", "M1 CRISPR", "screen value"),
         ("m2_nmd", "M2 NMD", "stop > 50 nt upstream of the last exon junction"),
         ("m2_nmd_sensitivity", "M2 NMD sensitivity", "log2FC upon UPF1 or SMG6 + SMG7 knock-down (HeLa)"),
-        ("m2_other_translated_orfs", "M2 other ORFs", "other translated ORFs on the locus"),
         ("m3_neighbour_position", "M3 position", "divergent or antisense to a protein-coding gene"),
         ("m3_coexpression", "M3 co-expression", "excess co-expression with the nearest coding gene"),
         ("m3_nuclear", "M3 nuclear", "HepG2 nuclear enrichment"),
@@ -186,8 +185,7 @@ INDEX = [
     ("Mechanism classes (per ORF)", [
         ("M1", "Encoded peptide: translation strength, peptides, conservation (copy-weighted), length, sequence "
                "features, CRISPR screens."),
-        ("M2", "Translation-coupled RNA regulation: NMD substrate, measured NMD sensitivity, other translated ORFs "
-               "on the locus."),
+        ("M2", "Translation-coupled RNA regulation: NMD substrate, measured NMD sensitivity."),
         ("M3", "Cis-regulation of a neighbour: divergent/antisense position, excess co-expression with the nearest "
                "coding gene, nuclear enrichment, enhancer-like chromatin, low polysome association."),
         ("M4", "Trans-acting nuclear RNA: nuclear enrichment, abundance, binding by nuclear RBPs, no cis signature."),

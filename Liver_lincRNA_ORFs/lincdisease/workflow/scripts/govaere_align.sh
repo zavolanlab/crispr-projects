@@ -15,7 +15,7 @@ trap 'rm -rf "$W"' EXIT
 STAR --runThreadN "$threads" --genomeDir "$index" --readFilesCommand zcat --readFilesIn "$fq1" "$fq2" \
      --outSAMtype BAM SortedByCoordinate --outSAMunmapped Within KeepPairs \
      --outSAMattributes NH HI AS nM NM MD --outSAMattrRGline ID:$run SM:$run \
-     --quantMode GeneCounts --limitBAMsortRAM 30000000000 --outFileNamePrefix "$W/"
+     --quantMode GeneCounts --limitBAMsortRAM 20000000000 --outFileNamePrefix "$W/"
 samtools view -@ "$threads" -C -T "$fa" --output-fmt-option embed_ref=0 --output-fmt-option version=3.1 \
      --output-fmt-option archive -o "$out/cram/$run.cram" "$W/Aligned.sortedByCoord.out.bam"
 samtools index "$out/cram/$run.cram"

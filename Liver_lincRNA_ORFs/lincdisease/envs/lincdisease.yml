@@ -17,5 +17,10 @@ dependencies:
   - requests
   - openpyxl
   - pytest
+  - ipykernel        # notebook execution (nbclient) and HTML export (nbconvert)
+  - nbclient
+  - nbformat
+  - nbconvert
+  - pyyaml           # notebook reads config/config.yaml
   - bedtools
   - diamond
