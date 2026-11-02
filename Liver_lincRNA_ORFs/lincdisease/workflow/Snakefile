@@ -53,8 +53,10 @@ NEEDS_FETCH = ancient(FETCHED)    # order only: a new download does not rerun th
 QUANT = expand("flags/quant.{w}.done", w=range(NQ))
 QUANT_SRA = expand("flags/quant_sra.{w}.done", w=range(NS))
 QUANT_NMD = expand("flags/quant_nmd.{w}.done", w=range(NS))
+QUANT_HCC = expand("flags/quant_hcc.{w}.done", w=range(NS))
 
-localrules: all, fetch, manifest, quant, chronic_manifest, quant_sra, nmd_manifest, quant_nmd, literature, govaere, govaere_fastq
+localrules: all, fetch, manifest, quant, chronic_manifest, quant_sra, nmd_manifest, quant_nmd, hcc_manifest, quant_hcc,
+            literature, govaere, govaere_fastq
 
 include: "rules/govaere.smk"
 
@@ -197,6 +199,29 @@ rule somatic:
     shell: "{LD} somatic {COMMON} > {log} 2>&1"
 
 
+rule hcc_manifest:
+    """Runs of the independent HCC cohorts (tumour + adjacent normal of the same patients) in recount3."""
+    input: NEEDS_FETCH
+    output: "quant_hcc/samples.tsv"
+    log: "logs/hcc_manifest.log"
+    shell: "{LD} hcc --manifest > {log} 2>&1"
+
+
+rule quant_hcc:
+    input: ancient("quant/regions.tsv"), ancient("quant_hcc/samples.tsv")
+    output: touch("flags/quant_hcc.{w}.done")
+    log: "logs/quant_hcc.{w}.log"
+    shell: "{LD} quant --sample-set quant_hcc --worker {wildcards.w} --n-workers {NS} --scratch quant_hcc > {log} 2>&1"
+
+
+rule hcc:
+    input: QUANT_HCC, "quant_hcc/samples.tsv", "quant/features.tsv", src("hcc", "disease")
+    output: "D1.hcc_replication.tsv"
+    resources: mem_mb=mem(16), runtime=60
+    log: "logs/hcc.log"
+    shell: "{LD} hcc > {log} 2>&1"
+
+
 rule encode:
     input: ORFS, LINC["gtf"], LINC["tsv"], NEEDS_FETCH, src("encode", "eclip", "chromatin")
     output: "encode.loci.tsv", "eclip.loci.tsv", "chromatin.loci.tsv"
@@ -228,7 +253,8 @@ rule mechanism:
 
 
 rule disease:
-    input: ORFS, QUANT, "D1.chronic.tsv", "D3.somatic.tsv", "D4.gwas.tsv", "D4.eqtl.tsv", "D5.literature.tsv",
+    input: ORFS, QUANT, "D1.chronic.tsv", "D1.hcc_replication.tsv", "D3.somatic.tsv", "D4.gwas.tsv", "D4.eqtl.tsv",
+           "D5.literature.tsv",
            NEEDS_FETCH, src("disease", "integrate", "scoring")
     output: "disease.loci.tsv"
     resources: mem_mb=mem(48), runtime=120

@@ -29,7 +29,8 @@ COLUMNS = [
     ("Summary scores", "crispr_screen_value", "CRISPR screen", "num",
      "2 = ORF-specific viability phenotype (Prensner 2021), 1 = phenotype (unresolved or Chen 2020 hit), 0 = none"),
     ("Summary scores", "dominant_class", "Dominant class", "text",
-     "mechanism class with the highest standardized score, above average and >= 0.5 SD ahead of the next, else none"),
+     "mechanism class with the highest standardized score z, above the median (z > 0) and >= 0.5 ahead of the next, "
+     "else none"),
     ("Summary scores", "hcc_direction", "HCC direction", "text", "from D1 HCC, D2, D3 (informative: percentile >= 0.75)"),
     ("Summary scores", "chronic_direction", "Chronic direction", "text", "up / down with chronic liver disease (D1 chronic)"),
 
@@ -48,18 +49,26 @@ COLUMNS = [
     *[("Mechanism classes", f"M{i}_score", f"M{i}", "score", d) for i, d in enumerate([
         "encoded peptide", "translation-coupled RNA regulation", "cis-regulation of a neighbour",
         "trans-acting RNA, nuclear", "trans-acting RNA, cytoplasmic", "small-RNA host"], 1)],
-    *[("Mechanism z", f"M{i}_z", f"M{i} z", "num", f"M{i} score in SD from the mean over all ORFs")
+    *[("Mechanism z", f"M{i}_z", f"M{i} z", "num",
+       f"M{i} standardized score: normal quantile of the class-score percentile among all ORFs (locus-weighted)")
       for i in range(1, 7)],
 
     ("D1 HCC detail", "log2FC_paired", "log2FC T/N", "num", "mean log2 fold change, tumour vs adjacent normal (50 pairs)"),
     ("D1 HCC detail", "fdr_paired", "FDR T/N", "p", "Wilcoxon signed-rank, BH"),
     ("D1 HCC detail", "auc_vs_gtex", "AUC vs GTEx", "num", "tumours vs GTEx liver, (r + 1) / 2"),
     ("D1 HCC detail", "fdr_vs_gtex", "FDR vs GTEx", "p", "Mann-Whitney, BH"),
+    ("D1 HCC detail", "hcc_rep_r", "r replication", "num",
+     "paired rank-biserial r, tumour vs adjacent normal in 4 independent cohorts (GSE77314, GSE77509, GSE94660, "
+     "GSE56545), pair-weighted mean"),
+    ("D1 HCC detail", "hcc_rep_fdr", "FDR replication", "p", "Stouffer over the 4 cohorts, BH"),
+    ("D1 HCC detail", "hcc_replicated", "Replicated", "bool", "same direction as D1 HCC and replication FDR < 0.05"),
 
     ("D1 chronic detail", "stat_D1_chronic", "D1 chronic", "num",
-     "weighted mean of cohort partial rank correlations (Hoang 2/3, Boldanova 1/3)"),
+     "weighted mean of cohort partial rank correlations (fibrosis 2/3: Hoang + Govaere by samples tested; HCV 1/3)"),
     ("D1 chronic detail", "chronic_fdr", "Chronic FDR", "p", "Stouffer, BH"),
     ("D1 chronic detail", "hoang_r", "r fibrosis", "num", "Hoang 2019, partial rank correlation with fibrosis stage"),
+    ("D1 chronic detail", "govaere_r", "r fibrosis (Govaere)", "num",
+     "Govaere 2020, partial rank correlation with fibrosis stage"),
     ("D1 chronic detail", "hoang_p", "p fibrosis", "p", ""),
     ("D1 chronic detail", "hcv_r", "r HCV", "num", "Boldanova 2017, HCV vs non-HCV"),
     ("D1 chronic detail", "hcv_p", "p HCV", "p", ""),
@@ -192,9 +201,10 @@ INDEX = [
         ("M5", "Trans-acting cytoplasmic RNA: cytoplasmic enrichment, binding by cytoplasmic RBPs."),
         ("M6", "Small-RNA host: snoRNA, scaRNA or miRNA genes in the locus."),
         ("Scores and dominance", "Class score = mean of its feature percentiles (absolute evidence; classes are "
-                                 "not exclusive). z = class score in SD from its mean over all ORFs, so classes with "
-                                 "few features do not win by their wider spread. Dominant class: highest z, above 0 "
-                                 "and >= 0.5 ahead of the next."),
+                                 "not exclusive). z = normal quantile of the class score's percentile among all ORFs "
+                                 "(each locus counts once), so classes with few or binary features do not win by "
+                                 "their wider spread. Dominant class: highest z, above 0 and >= 0.5 ahead of the "
+                                 "next."),
     ]),
 ]
 

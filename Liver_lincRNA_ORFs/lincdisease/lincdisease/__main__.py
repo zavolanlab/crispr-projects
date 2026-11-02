@@ -26,13 +26,14 @@ R: lincorfz results/ directory (background); T: candidate ORF table; D: download
 import argparse
 import os
 
+import numpy as np
 import pandas as pd
 
 import glob
 
 import json
 
-from . import (chromatin, chronic, controls, disease, eclip, encode, eqtl, genetics, homology, inputs, integrate,
+from . import (chromatin, chronic, controls, disease, eclip, encode, eqtl, genetics, hcc, homology, inputs, integrate,
                hla, literature, mechanism, nmd, peptide, qc, quant, report, resources, screens, somatic, weights)
 from . import scoring, table_html
 
@@ -272,6 +273,27 @@ def cmd_nmd(args):
           f"{((res['nmd_fdr'] < 0.05) & (res['nmd_log2fc'] > 0)).sum()}")
 
 
+def cmd_hcc(args):
+    """D1 HCC replication in independent tumour / adjacent-normal cohorts (quant_hcc/): manifest (needs network) or
+    statistics."""
+    d = os.path.join(args.out_dir, "quant_hcc")
+    if args.manifest:
+        os.makedirs(d, exist_ok=True)
+        man = hcc.manifest()
+        man.to_csv(os.path.join(d, "samples.tsv"), sep="\t", index=False)
+        print(man.groupby(["cohort", "tissue"])["patient"].nunique().to_string())
+        return
+    sums = read_sums(d)
+    feats = pd.read_csv(os.path.join(args.out_dir, "quant", "features.tsv"), sep="\t", index_col=0)
+    samples = pd.read_csv(os.path.join(d, "samples.tsv"), sep="\t")
+    samples = samples[samples["sample_id"].isin(sums["sample_id"])]
+    ncov = quant.normalize(sums, feats, samples).loc[lambda x: x.index.isin(quantifiable(feats))]
+    res = hcc.replication(ncov, samples, pseudocount=args.pseudocount).reindex(feats.index)
+    path = os.path.join(args.out_dir, "D1.hcc_replication.tsv")
+    res.to_csv(path, sep="\t", index_label="feature_id")
+    print(f"wrote {path}; tested {res['hcc_rep_r'].notna().sum()}, FDR < 0.05: {(res['hcc_rep_fdr'] < 0.05).sum()}")
+
+
 def cmd_literature(args):
     names = feature_names(args.results_dir, args.candidates)
     aliases = literature.hgnc_aliases(resources.fetch("hgnc", args.data_dir))
@@ -502,6 +524,10 @@ def cmd_disease(args):
     d3 = pd.read_csv(os.path.join(args.out_dir, "D3.somatic.tsv"), sep="\t", index_col=0)
     d4q = pd.read_csv(os.path.join(args.out_dir, "D4.eqtl.tsv"), sep="\t", index_col=0)
     d4q["D4_eqtl_supported"] = d4q["eqtl_gwas_mlog10p"] > 0
+    rep = pd.read_csv(os.path.join(args.out_dir, "D1.hcc_replication.tsv"), sep="\t", index_col=0)
+    # replicated: same direction as D1 HCC and combined FDR < 0.05 in the independent cohorts (reported, not scored)
+    rep["hcc_replicated"] = ((np.sign(rep["hcc_rep_r"]) == np.sign(d1["D1_HCC"].reindex(rep.index)))
+                             & (rep["hcc_rep_fdr"] < 0.05))
 
     stats = pd.DataFrame(index=feats.index)
     stats["D1_HCC"] = d1["D1_HCC"]
@@ -525,7 +551,7 @@ def cmd_disease(args):
     tum_spec = integrate.tumour_specificity(expr, samples)
     tum_spec[unq.reindex(tum_spec.index).fillna(False)] = float("nan")
     out = pd.concat([stats.add_prefix("stat_"), score, d1.drop(columns="D1_HCC"), d1c.drop(columns="D1_chronic"),
-                     d2.drop(columns="D2"),
+                     rep, d2.drop(columns="D2"),
                      d3.drop(columns="D3"), d4.drop(columns=["D4", "D4_hcc", "D4_chronic"]), d4q,
                      d5.drop(columns=["D5", "D5_hcc", "D5_chronic", "symbol"]),
                      tum_spec.rename("tumour_specificity")], axis=1)
@@ -661,6 +687,11 @@ def main():
     nm.add_argument("--pseudocount", type=float, default=0.05)
     nm.add_argument("--data-dir", help="download cache (recount3 gene sums, GENCODE); not needed with --manifest")
     nm.set_defaults(func=cmd_nmd)
+
+    hc = sub.add_parser("hcc", help="Step 3, D1 HCC replication in independent cohorts (quant_hcc/)")
+    hc.add_argument("--manifest", action="store_true", help="write quant_hcc/samples.tsv (needs network)")
+    hc.add_argument("--pseudocount", type=float, default=0.05)
+    hc.set_defaults(func=cmd_hcc)
 
     lt = sub.add_parser("literature", help="Step 3, D5: Europe PMC counts")
     _common(lt)

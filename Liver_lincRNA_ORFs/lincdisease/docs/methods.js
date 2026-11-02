@@ -179,6 +179,14 @@ C.push(eq(Sub(R("D1"), R("HCC")), R(" = "), F([Sub(R("r"), R("paired")), R(" + "
 C.push(p("The mean log2 fold changes and the BH-adjusted p-values of both tests are reported (`log2FC_paired`, " +
   "`fdr_paired`, `auc_vs_gtex`, `fdr_vs_gtex`). Rank statistics keep loci of very different expression levels, " +
   "and the many zeros of lowly expressed lincRNAs, on one scale."));
+C.push(p("**Replication** (reported, not scored). The matched-pairs statistic *r*_{paired} is computed in four " +
+  "independent recount3 cohorts of HCC tumours and adjacent non-tumour liver of the same patients: GSE77314 " +
+  "(49 pairs), GSE77509 (20 HBV-HCC with portal vein tumour thrombus; the runs of a sample averaged, thrombi not " +
+  "used), GSE94660 (21 HBV-HCC) and GSE56545 (14), quantified as in Section 3. A feature detected in < 20% of a " +
+  "cohort's samples is not tested there. Over the cohorts *c* with a statistic and *m*_{c} pairs, the combined " +
+  "*r* is the pair-weighted mean Σ *m*_{c} *r*_{c} / Σ *m*_{c} and the combined p-value is Stouffer's (signed " +
+  "*z* from the two-sided p, weights √*m*_{c}, as for D1 chronic below), BH-adjusted (`hcc_rep_fdr`). A locus is `hcc_replicated` if the combined " +
+  "*r* has the sign of D1 HCC and FDR < 0.05."));
 
 C.push(h2("D1 chronic: expression in chronic liver disease"));
 C.push(p("**Scaling.** Dividing by the total coverage lets the hepatocyte transcripts that dominate liver RNA set " +
@@ -388,6 +396,7 @@ C.push(p("Each score has positive controls, chosen in advance and processed like
   "fail are reported, not fixed by tuning weights. Result on run v2:"));
 C.push(table(["Score", "Control", "Expectation", "Result"], [
   ["D1 HCC", "HULC (up), LINC00261 (down)", "correct direction, FDR < 0.05", "pass, pass"],
+  ["D1 HCC replication", "HULC (up), LINC00261 (down)", "correct direction, FDR < 0.05", "fail (HULC r −0.05: down in GSE77509, up in GSE94660), pass"],
   ["D1 chronic", "COL1A1", "Hoang ρ > 0, p < 0.05", "pass"],
   ["D2", "BIRC5, CYTOR", "HR > 1", "pass, pass"],
   ["D3", "PVT1; MEG3; GSTP1 (post hoc)", "ρ_{CN} > 0 and D3 > 0; ρ_{meth} < 0", "pass; fail (MEG3 is positively correlated with promoter methylation in TCGA-LIHC); pass"],
