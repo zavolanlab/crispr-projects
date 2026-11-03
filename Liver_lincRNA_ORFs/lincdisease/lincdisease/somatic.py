@@ -6,8 +6,15 @@ midpoint of the feature span. Statistics: Spearman rho of CN vs expression, part
 TCGA PanCanAtlas: stromal and immune cells shift expression and CN amplitude together; the unadjusted rho is
 reported as cn_rho_raw), and gain / loss frequency (segment value > +0.3 / < -0.3).
 
-D3 = max(rho_CN, 0) x (gain frequency - loss frequency): > 0 when expression follows a frequent copy gain
-(oncogene-like), < 0 when it follows a frequent loss.
+Dosage response relative to the neighbourhood: in a frequently gained or lost region most expressed genes follow
+the copy number to some degree, so cn_rho alone mostly says where a locus lies. The same purity-adjusted rho is
+computed for the protein-coding genes (recount3 gene sums of the same tumours, scaled by the size factors) and
+cn_rho_neighbours is the median over the NEIGHBOURS nearest of them on the same chromosome (detected, ncov > 0, in
+>= MIN_DETECTED of the tumours); cn_rho_excess = cn_rho - cn_rho_neighbours.
+
+D3 = max(cn_rho_excess, 0) x (gain frequency - loss frequency), and 0 where cn_fdr >= 0.05: > 0 when expression
+follows a frequent copy gain more closely than the genes around it (oncogene-like), < 0 when it follows a frequent
+loss.
 """
 import numpy as np
 import pandas as pd
@@ -16,6 +23,8 @@ from scipy import stats
 from .disease import bh
 
 CN_THRESHOLD = 0.3
+NEIGHBOURS = 20
+MIN_DETECTED = 0.2
 
 
 def read_purity(path):
@@ -87,9 +96,43 @@ def _spearman_rows(a, b, covariate=None, min_n=20):
                          "n": pd.Series(n, dtype=float)})
 
 
-def d3(expr, samples, cn, purity=None, threshold=CN_THRESHOLD):
+def gene_spans(exons, gene_ids):
+    """chrom / start0 / end1 of the genes `gene_ids` (unversioned) from GTF exons (quant.read_gtf_exons)."""
+    e = exons.assign(gene=exons["gene_id"].str.split(".").str[0])
+    e = e[e["gene"].isin(set(gene_ids))]
+    return e.groupby("gene").agg(chrom=("chrom", "first"), start0=("start0", "min"), end1=("end1", "max"))
+
+
+def dosage_rho(expr, ncov, samples, cn, purity=None, min_detected=MIN_DETECTED):
+    """Purity-adjusted Spearman rho of copy number vs expression per gene (rows of `expr`, log scale; `ncov` linear,
+    for detection) in the primary tumours; genes detected in < `min_detected` of the tumours are left out."""
+    tum = tcga_expression_by_barcode(expr, samples, "01")
+    detected = (tcga_expression_by_barcode(ncov, samples, "01") > 0).mean(axis=1) >= min_detected
+    return _spearman_rows(tum[detected], cn.reindex(index=tum.index[detected]), purity)["rho"]
+
+
+def neighbour_median(spans, ref_spans, ref_values, k=NEIGHBOURS):
+    """Per row of `spans`: median of `ref_values` over the k rows of `ref_spans` (same chromosome) with a value
+    whose midpoints are nearest to its midpoint; NaN on chromosomes with fewer than k."""
+    ref = ref_spans.assign(v=ref_values.reindex(ref_spans.index)).dropna(subset=["v"])
+    ref_mid = (ref["start0"] + ref["end1"]) / 2
+    mid = (spans["start0"] + spans["end1"]) / 2
+    out = pd.Series(np.nan, index=spans.index)
+    for chrom, idx in spans.groupby("chrom").groups.items():
+        on = ref["chrom"] == chrom
+        if on.sum() < k:
+            continue
+        rm, rv = ref_mid[on].to_numpy(), ref.loc[on, "v"].to_numpy()
+        for fid in idx:
+            nearest = np.argpartition(np.abs(rm - mid[fid]), k - 1)[:k]
+            out[fid] = np.median(rv[nearest])
+    return out
+
+
+def d3(expr, samples, cn, purity=None, threshold=CN_THRESHOLD, neighbour_rho=None):
     """Per feature: CN statistics and the signed D3 statistic (rho adjusted for `purity` if given, a Series by
-    16-character sample barcode)."""
+    16-character sample barcode). `neighbour_rho`: cn_rho_neighbours per feature (neighbour_median of dosage_rho);
+    without it the excess is cn_rho itself."""
     tum = tcga_expression_by_barcode(expr, samples, "01")
     out = pd.DataFrame(index=expr.index)
     cnf = cn.reindex(index=expr.index)
@@ -97,8 +140,12 @@ def d3(expr, samples, cn, purity=None, threshold=CN_THRESHOLD):
     c = _spearman_rows(tum, cnf, purity)
     out["cn_rho"], out["cn_p"], out["cn_n"] = c["rho"], c["p"], c["n"]
     out["cn_fdr"] = bh(out["cn_p"])
+    out["cn_rho_neighbours"] = (neighbour_rho.reindex(out.index) if neighbour_rho is not None
+                                else pd.Series(0.0, index=out.index))
+    out["cn_rho_excess"] = out["cn_rho"] - out["cn_rho_neighbours"]
     tcn = cn.reindex(index=expr.index, columns=[s for s in cn.columns if s[13:15] == "01"])
     out["cn_gain_freq"] = (tcn > threshold).sum(axis=1) / tcn.notna().sum(axis=1)
     out["cn_loss_freq"] = (tcn < -threshold).sum(axis=1) / tcn.notna().sum(axis=1)
-    out["D3"] = out["cn_rho"].clip(lower=0) * (out["cn_gain_freq"] - out["cn_loss_freq"])
+    d3 = out["cn_rho_excess"].clip(lower=0) * (out["cn_gain_freq"] - out["cn_loss_freq"])
+    out["D3"] = d3.where(out["cn_fdr"] < 0.05, 0.0).where(out["cn_rho"].notna())
     return out

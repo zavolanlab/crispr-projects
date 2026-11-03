@@ -43,3 +43,27 @@ def test_partial_spearman_removes_confounder():
 def stats_rho(x, y):
     from scipy import stats
     return stats.spearmanr(x, y)[0]
+
+
+def test_d3_relative_to_neighbours():
+    rng = np.random.default_rng(2)
+    n = 60
+    ids = [f"TCGA-AA-{i:04d}-01A" for i in range(n)]
+    samples = pd.DataFrame({"source": "tcga", "sample_id": [f"tcga:{i}" for i in range(n)],
+                            "tcga_barcode": [b + "-11R" for b in ids]})
+    gain = rng.uniform(0, 1, n)
+    expr = pd.DataFrame([gain + rng.normal(0, 0.05, n)], index=["onc"], columns=samples["sample_id"])
+    cn = pd.DataFrame([gain], index=["onc"], columns=ids)
+    alone = somatic.d3(expr, samples, cn)
+    # neighbours that follow the copy number as closely: no excess dosage response
+    same = somatic.d3(expr, samples, cn, neighbour_rho=pd.Series({"onc": alone.loc["onc", "cn_rho"]}))
+    assert alone.loc["onc", "D3"] > 0.3 and same.loc["onc", "D3"] == 0
+
+
+def test_neighbour_median_nearest_on_same_chromosome():
+    ref = pd.DataFrame({"chrom": ["chr1"] * 5 + ["chr2"], "start0": [0, 100, 200, 1000, 5000, 150],
+                        "end1": [10, 110, 210, 1010, 5010, 160]}, index=list("abcdef"))
+    vals = pd.Series([0.1, 0.2, 0.3, 0.9, 0.9, 5.0], index=list("abcdef"))
+    spans = pd.DataFrame({"chrom": ["chr1", "chr3"], "start0": [100, 0], "end1": [110, 10]}, index=["x", "y"])
+    out = somatic.neighbour_median(spans, ref, vals, k=3)
+    assert np.isclose(out["x"], 0.2) and np.isnan(out["y"])

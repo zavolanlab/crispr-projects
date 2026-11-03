@@ -3,11 +3,13 @@ Disease components (LOGIC.md, Step 3) from the recount3 quantification of TCGA-L
 ncov scaled by the size factors of expression.py).
 
 Expression is log2(ncov + pseudocount). Effect sizes are rank-based, so they are comparable between loci with
-very different expression levels and robust to the many zeros of lowly expressed lincRNAs:
+very different expression levels; zeros (pairs without a difference) are kept in the ranking, so a locus that
+is undetected in most samples cannot reach an extreme r from its few detected ones:
 
 D1 HCC   matched-pairs rank-biserial correlation r (-1..1) of TCGA-LIHC primary tumour vs adjacent normal of the
-         same patient, from the Wilcoxon signed-rank test (signed: > 0 up in tumour); p-values BH-adjusted over
-         features. Reported, not scored: tumours vs GTEx liver (Mann-Whitney r; AUC = (r + 1) / 2), as TCGA adjacent
+         same patient, from the Wilcoxon signed-rank test with zero differences kept (Pratt; signed: > 0 up in
+         tumour); features detected (ncov > 0) in < MIN_DETECTED of the paired samples are not tested; p-values
+         BH-adjusted over features. Reported, not scored: tumours vs GTEx liver (Mann-Whitney r; AUC = (r + 1) / 2), as TCGA adjacent
          normals and GTEx liver, both non-tumour liver, already differ for most loci (study batch).
 D2       Cox proportional hazards of overall survival (OS) and progression-free interval (PFI) (TCGA-CDR
          endpoints) on standardized expression, adjusted for age, stage (I-II vs III-IV) and the log size factor
@@ -20,6 +22,9 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from statsmodels.stats.multitest import multipletests
+
+
+MIN_DETECTED = 0.2      # features detected (ncov > 0) in fewer of the samples are not tested (D1 HCC, D2)
 
 
 def log_expr(ncov, pseudocount):
@@ -68,14 +73,19 @@ def rank_biserial(x, y):
 
 
 def paired_rank_biserial(diff):
-    """Matched-pairs rank-biserial correlation of paired differences (zeros dropped) and Wilcoxon p."""
+    """
+    Matched-pairs rank-biserial correlation of paired differences and Wilcoxon signed-rank p, with zero differences
+    kept (Pratt): all |differences| are ranked, zeros included, and r = (sum of positive ranks - sum of negative
+    ranks) / sum of all ranks. Pairs without a difference (both 0, common for lowly expressed loci) thus pull r
+    toward 0 instead of being ignored. NaN if every difference is 0.
+    """
     d = np.asarray(diff, float)
-    d = d[d != 0]
-    if len(d) == 0:
-        return 0.0, 1.0
+    d = d[np.isfinite(d)]
+    if not (d != 0).any():
+        return np.nan, np.nan
     ranks = stats.rankdata(np.abs(d))
     r = (ranks[d > 0].sum() - ranks[d < 0].sum()) / ranks.sum()
-    return r, stats.wilcoxon(d).pvalue
+    return r, stats.wilcoxon(d, zero_method="pratt").pvalue
 
 
 def tcga_groups(samples):
@@ -88,19 +98,24 @@ def tcga_groups(samples):
     return one_per_patient("Primary Tumor"), one_per_patient("Solid Tissue Normal"), gtex_liver
 
 
-def d1_hcc(expr, samples):
+def d1_hcc(expr, samples, ncov=None, min_detected=MIN_DETECTED):
     """
     D1 HCC per feature (module docstring): paired tumour - normal (log2FC_paired, r_paired = D1_HCC, p, FDR) and,
     reported only, tumours vs GTEx liver (log2FC_vs_gtex, auc_vs_gtex, r_vs_gtex, p, FDR), with the group sizes.
+    `ncov` (linear scale): features detected (ncov > 0) in < `min_detected` of the paired samples are not tested
+    (paired statistics missing).
     """
     tum, nor, liver = tcga_groups(samples)
     pairs = tum.merge(nor, on="patient", suffixes=("_t", "_n"))
     e_tum = expr[tum["sample_id"]]
     e_gtex = expr[liver["sample_id"]]
     diff = expr[pairs["sample_id_t"]].to_numpy() - expr[pairs["sample_id_n"]].to_numpy()
+    paired = list(pairs["sample_id_t"]) + list(pairs["sample_id_n"])
+    detected = ((ncov[paired] > 0).mean(axis=1) >= min_detected).reindex(expr.index).to_numpy() \
+        if ncov is not None else np.ones(len(expr), bool)
     rows = []
     for i, fid in enumerate(expr.index):
-        r_p, p_p = paired_rank_biserial(diff[i])
+        r_p, p_p = paired_rank_biserial(diff[i]) if detected[i] else (np.nan, np.nan)
         r_g, p_g = rank_biserial(e_tum.iloc[i], e_gtex.iloc[i])
         rows.append((fid, diff[i].mean(), r_p, p_p,
                      e_tum.iloc[i].mean() - e_gtex.iloc[i].mean(), (r_g + 1) / 2, r_g, p_g))
@@ -148,7 +163,7 @@ def _cox(df, endpoint):
     return s["exp(coef)"], s["z"], s["p"], len(d)
 
 
-def d2_survival(expr, samples, cdr, size_factors, min_expressed=0.2, ncov=None):
+def d2_survival(expr, samples, cdr, size_factors, min_expressed=MIN_DETECTED, ncov=None):
     """
     D2 per feature (module docstring): HR / z / p / n and BH-FDR per endpoint (OS, PFI) and D2 = mean z.
     `ncov` (linear scale) decides which features are expressed enough to test; `size_factors`: by sample_id. A model

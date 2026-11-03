@@ -28,7 +28,11 @@ SF_TOP_EXCLUDED = 0.01
 
 
 def size_factors(genes):
-    """Median-of-ratios size factors (geometric mean 1) of AUC-scaled gene sums (genes x samples, protein-coding)."""
+    """
+    Median-of-ratios size factors (geometric mean 1) of gene sums scaled by total coverage (genes x samples,
+    protein-coding). Equivalent to DESeq2's estimateSizeFactors on the kept genes: per sample, the median over genes
+    of log(y_gj) - mean_j log(y_gj), exponentiated; zeros are left out per gene (log of 0 is missing).
+    """
     g = genes[(genes > 0).mean(axis=1) >= SF_MIN_DETECTED]
     g = g.drop(g.mean(axis=1).nlargest(max(1, int(len(g) * SF_TOP_EXCLUDED))).index)
     lg = np.log(g.where(g > 0))
@@ -52,7 +56,7 @@ def read_sums(sample_dir, regions):
     """
     Coverage sums of <sample_dir>/sums*/ joined by sample, for the features of `regions` (current quant/regions.tsv).
     Raises if a sums directory has no regions copy, if regions changed since a directory was computed, or if a
-    feature has no sums.
+    feature has no sums in some or all samples.
     """
     parts = []
     for sd in sorted(glob.glob(os.path.join(sample_dir, "sums*"))):
@@ -78,7 +82,14 @@ def read_sums(sample_dir, regions):
     if missing:
         raise ValueError(f"{sample_dir}: no sums for {len(missing)} features ({missing[:3]}); quantify them with "
                          f"`quant --sample-set {os.path.basename(sample_dir)} --features ... --sums-dir sums_<name>`")
-    return sums.copy()[wanted].reset_index()       # copy: the joins leave a fragmented frame
+    sums = sums.copy()[wanted]                      # copy: the joins leave a fragmented frame
+    gaps = sums.isna()
+    if gaps.any().any():     # a sample missing from a sums_<name> directory, or a feature no longer quantified
+        samples, feats = gaps.any(axis=1), gaps.any()
+        raise ValueError(f"{sample_dir}: no sums for {int(samples.sum())} samples x {int(feats.sum())} features "
+                         f"(e.g. {list(samples[samples].index[:3])} x {list(feats[feats].index[:3])}); quantify them "
+                         f"with `quant --sample-set {os.path.basename(sample_dir)} --features ...`")
+    return sums.reset_index()
 
 
 def quantifiable(feats):

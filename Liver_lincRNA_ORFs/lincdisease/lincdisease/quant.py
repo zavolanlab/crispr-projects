@@ -229,10 +229,30 @@ def _download(url, dest):
     os.replace(tmp, dest)
 
 
+def _resume(path, columns):
+    """Sample ids already in a sums file. Rows cut short by an interrupted append (no line end, or fewer fields than
+    the header) are removed, so that their samples are fetched again."""
+    with open(path) as fh:
+        lines = fh.readlines()
+    header = lines[0].rstrip("\n").split("\t")
+    if header != columns:
+        raise ValueError(f"{path}: the columns differ from those written by this run (another feature set); "
+                         "quantify added features into a separate sums directory (--sums-dir)")
+    good = [ln for ln in lines[1:] if ln.endswith("\n") and ln.count("\t") == len(header) - 1]
+    if len(good) < len(lines) - 1:
+        print(f"{path}: {len(lines) - 1 - len(good)} incomplete rows removed", flush=True)
+        tmp = f"{path}.tmp.{os.getpid()}"
+        with open(tmp, "w") as fh:
+            fh.writelines([lines[0]] + good)
+        os.replace(tmp, path)
+    return {ln.split("\t", 1)[0] for ln in good}
+
+
 def run(samples, regions, out_dir, worker="0", scratch=None):
     """
     Stream the bigWigs of `samples` (manifest rows); append one row of sums per sample, skip done ones. The regions
-    are kept in out_dir/regions.tsv; a later run on changed regions raises (expression.read_sums checks the same).
+    are kept in out_dir/regions.tsv. A later run keeps its columns: the features of the regions must be among them
+    with unchanged regions (expression.read_sums checks the same); features no longer in the regions get NaN.
     Samples that fail (download, bigWig) are reported and the run exits non-zero after the others, so that a rerun
     retries them.
     """
@@ -241,17 +261,25 @@ def run(samples, regions, out_dir, worker="0", scratch=None):
     os.makedirs(out_dir, exist_ok=True)
     saved = os.path.join(out_dir, "regions.tsv")
     if os.path.exists(saved):
-        changed = changed_features(pd.read_csv(saved, sep="\t"), regions)
+        saved_regions = pd.read_csv(saved, sep="\t")
+        changed = changed_features(saved_regions, regions)
         if changed:
             raise ValueError(f"{out_dir}: regions of {len(changed)} features differ from those of the existing sums")
+        new = set(regions["feature_id"]) - set(saved_regions["feature_id"])
+        if new:
+            raise ValueError(f"{out_dir}: {len(new)} features are not in the existing sums (e.g. {sorted(new)[:3]}); "
+                             "quantify them into a separate sums directory (--sums-dir sums_<name>)")
+        features = sorted(saved_regions["feature_id"].unique())
     else:
-        regions[REGION_COLUMNS].to_csv(saved, sep="\t", index=False)
-    features = sorted(regions["feature_id"].unique())
+        tmp = f"{saved}.tmp.{os.getpid()}"       # workers start together: never leave a half-written file
+        regions[REGION_COLUMNS].to_csv(tmp, sep="\t", index=False)
+        os.replace(tmp, saved)
+        features = sorted(regions["feature_id"].unique())
     path = os.path.join(out_dir, f"sums.{worker}.tsv")
-    done = set()
-    if os.path.exists(path):
-        done = set(pd.read_csv(path, sep="\t", usecols=["sample_id"])["sample_id"])
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        done = _resume(path, ["sample_id"] + features)
     else:
+        done = set()
         with open(path, "w") as fh:
             fh.write("\t".join(["sample_id"] + features) + "\n")
     tmpdir = tempfile.mkdtemp(dir=scratch)
@@ -264,7 +292,7 @@ def run(samples, regions, out_dir, worker="0", scratch=None):
             try:
                 _download(row.url, local)
                 bw = pyBigWig.open(local)
-                sums = sum_regions(bw, regions).reindex(features).fillna(0.0)
+                sums = sum_regions(bw, regions).reindex(features)
                 bw.close()
             except Exception as exc:          # one bad sample must not stop the stream
                 print(f"failed {row.sample_id}: {exc}", flush=True)

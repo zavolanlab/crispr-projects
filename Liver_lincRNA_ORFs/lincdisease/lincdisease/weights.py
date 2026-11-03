@@ -3,7 +3,8 @@ Optional fitted weights of the disease score (LOGIC.md, "Weight fitting").
 
 Labels: established liver-disease lncRNAs = background loci with >= MIN_PAPERS non-retracted liver papers (D5
 literature counts); negatives = background loci with an HGNC-style symbol and no liver paper (loci named only by
-an Ensembl or StringTie id cannot have papers, so they are not negatives); loci in between are not labelled.
+an Ensembl, StringTie or NONCODE id, literature.UNNAMED, cannot have papers, so they are not negatives); loci in
+between are not labelled.
 D5 itself is not a predictor, so the labels are not re-used as features.
 
 Model: logistic regression of the label on the component percentiles (D1, D2, D3, D4, D6; missing = 0.5, centred
@@ -18,17 +19,18 @@ from scipy import optimize
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 
-from . import integrate, scoring
+from . import integrate, literature, scoring
 
 COMPONENTS = ("D1", "D2", "D3", "D4", "D6")
 MIN_PAPERS = 5
+# L2 penalties tried in the cross-validation: a coarse log grid from almost unpenalized to strongly shrunk
 LAMBDAS = (0.01, 0.1, 1.0, 10.0)
 
 
 def labels(d5, is_background, min_papers=MIN_PAPERS):
     """1 / 0 / NaN per feature from the D5 table (symbol, n_liver, n_retracted)."""
     papers = d5["n_liver"] - d5["n_retracted"].fillna(0)
-    named = ~d5["symbol"].astype(str).str.match(r"^(MSTRG\.|ENSG\d)")
+    named = ~d5["symbol"].astype(str).str.match(literature.UNNAMED)
     y = pd.Series(np.nan, index=d5.index)
     y[papers >= min_papers] = 1.0
     y[(d5["n_liver"] == 0) & named] = 0.0

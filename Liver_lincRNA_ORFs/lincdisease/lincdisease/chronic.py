@@ -23,10 +23,10 @@ three), and the p-value is a t test with n - 2 - k degrees of freedom.
                  (`parent_driven`), the parent gene's expression is added as a covariate
   cell-intrinsic technical covariates + cell-type marker scores (reported, not scored: a lincRNA of stellate
                  cells that rises with fibrosis is disease-associated, but not regulated within cells)
-D1_chronic = weighted mean of the available scored cohort statistics, per feature: fibrosis 2/3, split between hoang
-and govaere in proportion to the samples tested for the feature (all of it to one cohort if the other has no
-statistic); hcv 1/3; suppli 0; a feature without a fibrosis statistic is the hcv statistic, and vice versa. The combined
-p-value is Stouffer's (z from the two-sided p with the sign of the statistic, weights sqrt(n)), BH-FDR over features.
+D1_chronic = Stouffer z of the scored cohorts (hoang, govaere, hcv; suppli reported, not scored): z from each
+cohort's two-sided p with the sign of its statistic, weights sqrt(n tested), so that each cohort counts by its size;
+its two-sided p is BH-adjusted over features (chronic_fdr). chronic_r (reported) = the mean cohort statistic
+weighted by n.
 """
 import os
 
@@ -41,14 +41,12 @@ from .quant import parse_attributes
 
 COHORTS = {"hoang": "SRP197353", "suppli": "SRP186450", "hcv": "SRP078450"}    # recount3 projects
 ALL_COHORTS = [*COHORTS, "govaere"]
-# Cohort weights of D1_chronic (cohort_weights). The fibrosis cohorts share FIBROSIS_WEIGHT, per feature in
-# proportion to the samples tested; the other cohorts have fixed weights (WEIGHTS). Suppli has weight 0 (reported,
-# not scored): its cases differ technically from its controls (fewer uniquely mapped reads, lower exonic fraction;
-# the 15 samples with the lowest exonic fraction are all cases), and after scaling and covariate adjustment 40% of
-# loci still have p < 0.01 with a median r of +0.14 (Hoang: 9%, 0.00).
+# Cohorts combined into D1_chronic. Suppli is reported, not scored: its cases differ technically from its controls
+# (fewer uniquely mapped reads, lower exonic fraction; the 15 samples with the lowest exonic fraction are all cases),
+# and after scaling and covariate adjustment 40% of loci still have p < 0.01 with a median r of +0.14 (Hoang: 9%,
+# 0.00).
 FIBROSIS_COHORTS = ("hoang", "govaere")
-FIBROSIS_WEIGHT = 2 / 3
-WEIGHTS = {"suppli": 0.0, "hcv": 1 / 3}
+SCORED_COHORTS = ("hoang", "govaere", "hcv")
 MIN_DETECTED = 0.2      # features detected (ncov > 0) in fewer samples of a cohort are not tested
 TECHNICAL = ["log_input_reads", "pct_unique", "exonic_fraction"]
 # liver cell-type markers (MacParland et al. 2018 liver atlas); COL1A1 left out, as it is the D1 chronic control,
@@ -213,6 +211,9 @@ def partial_rank(expr, y, covars=None):
     Partial rank correlation of every row of `expr` (features x samples) with y, given the sample covariates
     (samples x k; ranks are residualized on covariate ranks). Samples with a missing y or covariate are dropped.
     Returns DataFrame stat / p / n.
+    Equivalent to the Pearson correlation of the residuals of rank(expression) and rank(y) after a linear
+    regression on [1, covariate ranks] (H = X pinv(X) is that regression's hat matrix), with a t test on
+    n - 2 - k df.
     """
     ok = y.notna()
     if covars is not None and covars.shape[1]:
@@ -264,31 +265,16 @@ def cohort_stats(expr, ncov, pheno, covars, suffix=""):
     return pd.DataFrame(res).reindex(expr.index)
 
 
-def cohort_weights(cs, weights=WEIGHTS, suffix=""):
-    """Per feature and scored cohort: weight of its statistic (missing statistic -> 0). The fibrosis cohorts share
-    FIBROSIS_WEIGHT in proportion to the samples tested for the feature."""
-    w = pd.DataFrame(index=cs.index)
-    fib = [c for c in FIBROSIS_COHORTS if f"{c}_r{suffix}" in cs]
-    n = pd.DataFrame({c: cs[f"{c}_n{suffix}"].where(np.isfinite(cs[f"{c}_r{suffix}"]), 0).fillna(0) for c in fib},
-                     index=cs.index)
-    tot = n.sum(axis=1)
-    for c in fib:
-        w[c] = FIBROSIS_WEIGHT * (n[c] / tot.where(tot > 0)).fillna(0)
-    for c, wc in weights.items():
-        if wc > 0 and f"{c}_r{suffix}" in cs:
-            w[c] = np.where(np.isfinite(cs[f"{c}_r{suffix}"]), wc, 0.0)
-    return w
-
-
-def combine(cs, weights=WEIGHTS, suffix=""):
-    """D1_chronic (weighted mean of the cohort statistics, cohort_weights), Stouffer p and BH-FDR."""
-    w = cohort_weights(cs, weights, suffix)
-    r, p, n = (cs[[f"{c}_{x}{suffix}" for c in w.columns]].to_numpy(float) for x in ("r", "p", "n"))
-    w = w.to_numpy(float)
-    ok = np.isfinite(r) & (w > 0)                     # cohorts that contribute to a feature
+def combine(cs, suffix=""):
+    """D1_chronic = chronic_z (Stouffer z of the scored cohorts, weights sqrt(n)), its p and BH-FDR, chronic_r (mean
+    cohort statistic weighted by n) and the number of cohorts combined."""
+    cohorts = [c for c in SCORED_COHORTS if f"{c}_r{suffix}" in cs]
+    r, p, n = (cs[[f"{c}_{x}{suffix}" for c in cohorts]].to_numpy(float) for x in ("r", "p", "n"))
+    ok = np.isfinite(r) & np.isfinite(p) & (np.nan_to_num(n) > 0)       # cohorts that tested the feature
     out = pd.DataFrame(index=cs.index)
-    out["D1_chronic"] = weighted_mean(r, w, ok)
     out["chronic_z"], out["chronic_p"] = stouffer(r, p, n, ok)
+    out["D1_chronic"] = out["chronic_z"]
+    out["chronic_r"] = weighted_mean(r, n, ok)
     out["chronic_fdr"] = bh(out["chronic_p"])
     out["chronic_n_cohorts"] = ok.sum(axis=1)
     return out

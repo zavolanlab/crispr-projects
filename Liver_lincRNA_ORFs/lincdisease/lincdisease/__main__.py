@@ -49,7 +49,8 @@ def write(df, out_dir, name, **kw):
 
 
 def read_per_orf(out_dir, name, orfs):
-    """A per-ORF table of an earlier step, in the row order (and index) of `orfs`."""
+    """A per-ORF table of an earlier step, in the row order (and index) of `orfs`: the step's row for each
+    orfs["orf_id"] (NaN where it has none), relabelled with the index of `orfs`."""
     return read(out_dir, name).set_index("orf_id").reindex(orfs["orf_id"]).set_axis(orfs.index)
 
 
@@ -71,8 +72,15 @@ def fetch_gene_sums(data_dir, source, project):
 
 
 def gene_sums(data_dir, projects, samples):
-    """AUC-scaled recount3 gene sums (genes x samples) of the given samples of the (source, project) pairs."""
-    return pd.concat([quant.read_gene_sums(fetch_gene_sums(data_dir, s, p), s, samples) for s, p in projects], axis=1)
+    """AUC-scaled recount3 gene sums (genes x samples) of the given samples of the (source, project) pairs. Raises
+    if a sample of these projects has none (it would drop out of the size factors and every test without notice)."""
+    genes = pd.concat([quant.read_gene_sums(fetch_gene_sums(data_dir, s, p), s, samples) for s, p in projects],
+                      axis=1)
+    wanted = samples[[sp in set(projects) for sp in zip(samples["source"], samples["project"])]]["sample_id"]
+    missing = wanted[~wanted.isin(genes.columns)]
+    if len(missing):
+        raise ValueError(f"no recount3 gene sums for {len(missing)} samples ({list(missing[:3])})")
+    return genes
 
 
 def quantifiable_only(df, feats):
@@ -199,9 +207,6 @@ def cmd_scaling(args):
     pc = expression.protein_coding_ids(resources.fetch("gencode_gtf", args.data_dir))
     present = set(zip(samples["source"], samples["project"]))
     genes = gene_sums(args.data_dir, [sp for sp in tcga_gtex_projects(args.data_dir) if sp in present], samples)
-    missing = samples["sample_id"][~samples["sample_id"].isin(genes.columns)]
-    if len(missing):
-        raise ValueError(f"no gene sums for {len(missing)} samples ({list(missing[:3])})")
     sf = expression.size_factors(genes[genes.index.isin(pc)])
     write_size_factors(sf, args.out_dir, "quant")
     print(f"wrote {os.path.join(args.out_dir, 'quant', 'size_factors.tsv')}; median by group:")
@@ -289,11 +294,24 @@ def cmd_hcc(args):
 
 
 def cmd_somatic(args):
-    _, expr, samples, feats, _ = tcga_gtex_expression(args.out_dir, args.pseudocount)
+    """D3: copy number vs expression of the loci, relative to the protein-coding genes around them."""
+    _, expr, samples, feats, sf = tcga_gtex_expression(args.out_dir, args.pseudocount)
     segments = pd.read_csv(resources.fetch("tcga_lihc_cn", args.data_dir), sep="\t")
     cn = somatic.cn_at(feats[["chrom", "start0", "end1"]], segments)
     purity = somatic.read_purity(resources.fetch("tcga_purity", args.data_dir))
-    res = somatic.d3(quantifiable_only(expr, feats), samples, cn, purity=purity).reindex(feats.index)
+    # the neighbourhood: protein-coding genes of the same tumours
+    tcga = samples[samples["source"] == "tcga"]
+    pc = expression.protein_coding_ids(resources.fetch("gencode_gtf", args.data_dir))
+    genes = gene_sums(args.data_dir, [("tcga", "LIHC")], tcga)
+    genes = expression.scaled(genes[genes.index.isin(pc)], sf)
+    spans = somatic.gene_spans(gencode_exons(args.data_dir), genes.index)
+    genes = genes.loc[genes.index.intersection(spans.index)]
+    rho = somatic.dosage_rho(np.log2(genes + 1), genes, tcga, somatic.cn_at(spans.loc[genes.index], segments),
+                             purity=purity)
+    neighbours = somatic.neighbour_median(feats[["chrom", "start0", "end1"]], spans, rho)
+    print(f"protein-coding genes with a dosage rho: {rho.notna().sum()} (median {rho.median():.3f})")
+    res = somatic.d3(quantifiable_only(expr, feats), samples, cn, purity=purity,
+                     neighbour_rho=neighbours).reindex(feats.index)
     path = write(res, args.out_dir, "D3.somatic.tsv", index_label="feature_id")
     print(f"wrote {path}; CN tested {res['cn_rho'].notna().sum()}")
 
@@ -334,7 +352,7 @@ def cmd_disease(args):
     cdr = pd.read_excel(resources.fetch("tcga_cdr", args.data_dir), sheet_name=0)
 
     q = expr.index.isin(expression.quantifiable(feats))
-    d1 = disease.d1_hcc(expr.loc[q], samples)
+    d1 = disease.d1_hcc(expr.loc[q], samples, ncov=ncov.loc[q])
     d2 = disease.d2_survival(expr.loc[q], samples, cdr, ncov=ncov.loc[q], size_factors=sf)
     cell = loci[["log2TPM_HepG2", "log2TPM_Huh7"]].astype(float).max(axis=1)
     d6 = integrate.liver_context(expr, samples, cell)
@@ -345,7 +363,6 @@ def cmd_disease(args):
     eqtl_table = read(args.out_dir, "D4.eqtl.tsv", index_col=0)
     eqtl_table["D4_eqtl_supported"] = eqtl_table["eqtl_gwas_mlog10p"] > 0
     replication = read(args.out_dir, "D1.hcc_replication.tsv", index_col=0)
-    replication["hcc_replicated"] = hcc.replicated(replication, d1["D1_HCC"])
 
     # the component statistics (stat_* in the output); D4_/D5_hcc and _chronic are the disease-specific parts
     stats = pd.concat([d1["D1_HCC"], d1c["D1_chronic"], d2["D2"], d3["D3"], d4["D4"], d5["D5"],
@@ -356,6 +373,7 @@ def cmd_disease(args):
     stats.loc[not_quantifiable, ["D1_HCC", "D1_chronic", "D2", "gtex_liver_median", "liver_specificity"]] = float("nan")
     is_bg = pd.Series(stats.index.isin(loci.index), index=stats.index)
     score = integrate.disease_score(stats, is_bg)
+    replication["hcc_replicated"] = hcc.replicated(replication, d1["D1_HCC"], is_bg)
 
     tum_spec = integrate.tumour_specificity(expr, samples)
     tum_spec[not_quantifiable.reindex(tum_spec.index).fillna(False).astype(bool)] = float("nan")
@@ -463,7 +481,8 @@ def fetch_encode(data_dir):
 
 
 def cmd_encode(args):
-    """M5 nuclear localisation (fractionation), M4/M5 eCLIP binding and M4 chromatin at the TSS, from ENCODE HepG2."""
+    """From ENCODE HepG2: nuclear / cytoplasmic localisation (fractionation; M5), eCLIP binding by nuclear (M4) and
+    cytoplasmic (M5) RBPs, and chromatin at the TSS (M3 enhancer-like chromatin)."""
     d = os.path.join(args.data_dir, "encode")
     files = fetch_encode(args.data_dir)
     loci = inputs.loci(inputs.load(args.results_dir, args.candidates))
@@ -563,7 +582,8 @@ def cmd_report(args):
     act = report.actionability(orfs, dis, peptides, read(args.out_dir, "hla.orfs.tsv", index_col=0))
     table = report.orf_table(orfs, orf_qc, dis, mech, act)
     write(table, args.out_dir, "lincdisease.orfs.tsv", index=False)
-    cand = table[table["is_candidate"]].sort_values(["disease_score", "priority_score"], ascending=False)
+    # headline: the disease score without prior literature (D5), unbiased by how well studied a locus is
+    cand = table[table["is_candidate"]].sort_values(["disease_score_noD5", "priority_score"], ascending=False)
     write(cand, args.out_dir, "lincdisease.candidates.tsv", index=False)
     screen = report.screen_supported(table, read(args.out_dir, "support.orfs.tsv"))
     write(screen, args.out_dir, "lincdisease.screen_supported.tsv", index=False)
@@ -663,6 +683,8 @@ def main():
 
     s = sub.add_parser("manifest", help="Step 2: recount3 samples (TCGA-LIHC, GTEx)")
     s.add_argument("--data-dir", required=True)
+    # 10 samples per non-liver tissue suffice for the tissue medians of liver and tumour specificity (D6,
+    # actionability) and keep streaming time down; the seed fixes which samples are drawn
     s.add_argument("--gtex-per-tissue", type=int, default=10)
     s.add_argument("--seed", type=int, default=1)
     s.set_defaults(func=cmd_manifest)

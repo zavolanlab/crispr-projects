@@ -40,9 +40,14 @@ def test_replication_combines_cohorts():
     assert abs(res.loc["flat", "hcc_rep_r"]) < 0.6
 
 
-def test_replicated_missing_when_untested():
-    rep = pd.DataFrame({"hcc_rep_r": [0.5, -0.5, 0.5, np.nan], "hcc_rep_fdr": [0.01, 0.01, 0.2, np.nan]},
-                       index=list("abcd"))
-    d1 = pd.Series([0.3, 0.3, 0.3, 0.3], index=list("abcd"))
-    out = hcc.replicated(rep, d1)
-    assert out["a"] is True and out["b"] is False and out["c"] is False and pd.isna(out["d"])
+def test_replicated_missing_when_untested_and_centred():
+    # background e-h: hcc_rep_r median 0.3, D1 HCC median 0.2
+    rep = pd.DataFrame({"hcc_rep_r": [0.5, -0.5, 0.5, np.nan, 0.2, 0.3, 0.3, 0.4],
+                        "hcc_rep_fdr": [0.01, 0.01, 0.2, np.nan, 0.5, 0.5, 0.5, 0.5]}, index=list("abcdefgh"))
+    d1 = pd.Series([0.3, -0.3, 0.3, 0.3, 0.1, 0.2, 0.2, 0.3], index=list("abcdefgh"))
+    bg = pd.Series([False] * 4 + [True] * 4, index=list("abcdefgh"))
+    out = hcc.replicated(rep, d1, bg)
+    assert out["a"] is True and out["b"] is True and out["c"] is False and pd.isna(out["d"])
+    # up in both, but below the background shift in the replication: not replicated
+    rep.loc["a", "hcc_rep_r"] = 0.25
+    assert hcc.replicated(rep, d1, bg)["a"] is False

@@ -21,10 +21,10 @@ def _data():
 def test_sensitivity_direction_and_detection():
     ncov, samples, genes = _data()
     res = nmd.sensitivity(ncov, samples, genes, pseudocount=0.0001)
-    assert res.loc["target", "nmd_log2fc"] == pytest.approx(2.0, abs=1e-3)
+    assert res.loc["target", "nmd_log2fc_raw"] == pytest.approx(2.0, abs=1e-3)
     assert res.loc["target", "log2fc_UPF1_kd"] == pytest.approx(res.loc["target", "log2fc_SMG6_SMG7_kd"])
-    assert res.loc["flat", "nmd_log2fc"] == pytest.approx(0.0, abs=1e-6)
-    assert np.isnan(res.loc["rare", "nmd_log2fc"]) and res.loc["rare", "detected_fraction"] == pytest.approx(1 / 8)
+    assert res.loc["flat", "nmd_log2fc_raw"] == pytest.approx(0.0, abs=1e-6)
+    assert np.isnan(res.loc["rare", "nmd_log2fc_raw"]) and res.loc["rare", "detected_fraction"] == pytest.approx(1 / 8)
 
 
 def test_size_factors_remove_sample_depth():
@@ -35,7 +35,7 @@ def test_size_factors_remove_sample_depth():
     genes2["s0"] *= 2
     a = nmd.sensitivity(ncov, samples, genes, pseudocount=0.0001)
     b = nmd.sensitivity(ncov2, samples, genes2, pseudocount=0.0001)
-    assert b.loc["target", "nmd_log2fc"] == pytest.approx(a.loc["target", "nmd_log2fc"], abs=1e-3)
+    assert b.loc["target", "nmd_log2fc_raw"] == pytest.approx(a.loc["target", "nmd_log2fc"], abs=1e-3)
 
 
 def test_contrast_variance_is_within_conditions():
@@ -47,5 +47,15 @@ def test_contrast_variance_is_within_conditions():
     ncov = pd.DataFrame([noise * np.array([1] * 6 + [8] * 3 + [2] * 3)], index=["x"], columns=sid)
     genes = pd.DataFrame(np.full((50, 12), 100.0), columns=sid)
     res = nmd.sensitivity(ncov, pd.DataFrame({"sample_id": sid, "condition": cond}), genes, pseudocount=1e-6)
-    assert res.loc["x", "nmd_log2fc"] == pytest.approx(2.0, abs=0.02)
+    assert res.loc["x", "nmd_log2fc_raw"] == pytest.approx(2.0, abs=0.02)
     assert res.loc["x", "nmd_p"] < 1e-8
+
+
+def test_shrinkage_pulls_noisy_fold_changes_toward_zero():
+    from lincdisease import nmd
+    rng = np.random.default_rng(0)
+    lfc = pd.Series(np.r_[rng.normal(0, 1, 200), 3.0, 3.0])
+    se = pd.Series(np.r_[np.full(200, 0.5), 0.1, 3.0])
+    out = nmd.shrunk(lfc, se)
+    assert out.iloc[200] > 2.8 and out.iloc[201] < 0.5          # same fold change, precise vs noisy
+    assert (np.sign(out) == np.sign(lfc)).all()

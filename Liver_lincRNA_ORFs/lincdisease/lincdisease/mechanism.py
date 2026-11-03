@@ -6,20 +6,32 @@ counts once), class scores, rank-based standardized class scores and dominant cl
 Features computed here (higher = more support for the class; '-' marks features ranked on the negated value):
   M1  translation (pooled log10 Bayes factor), fraction of the transcript's P-sites in the ORF, specific
       peptides (proteomics peptides absent from canonical proteins + lincORF-specific HLA-I peptides),
-      PhyloCSF and ORF vs non-ORF exon PhyloP contrast, both weighted by copy-attribution confidence, sequence
-      features (peptide.py), hits of published CRISPR screens (screens.py). The features that rise with ORF length
-      (LENGTH_DEPENDENT) are ranked among ORFs of similar length (LENGTH_BINS quantile bins of the background), so
-      that M1 does not reward length as such.
+      PhyloCSF and ORF vs non-ORF exon PhyloP contrast, sequence features (peptide.py), hits of published CRISPR
+      screens (screens.py)
   M2  NMD substrate (stop codon > NMD_STOP_DISTANCE nt upstream of the last exon junction), NMD sensitivity (mean
       up-regulation upon UPF1 knock-down and SMG6 + SMG7 knock-down in HeLa, nmd.py)
   M3  divergent / antisense position next to a protein-coding gene, low polysome association (-MRL percentile),
       co-expression with the nearest protein-coding gene (TSS distance <= 100 kb) across TCGA-LIHC and GTEx
-      liver: Spearman rho minus the median rho of protein-coding gene pairs in the same TSS-distance bin
-  M4  copy number (log2 TPM HepG2)
+      liver: Spearman rho minus the median rho of protein-coding gene pairs in the same TSS-distance bin,
+      enhancer-like chromatin at the TSS (chromatin.py)
+  M4  abundance (log2 TPM in HepG2: a trans-acting RNA needs copies), eCLIP binding by nuclear RBPs
+  M5  cytoplasmic enrichment in HepG2 (encode.py: the negated nuclear / cytoplasmic log2 ratio), eCLIP binding by
+      cytoplasmic RBPs
   M6  snoRNA / scaRNA / miRNA genes (GENCODE + UCSC wgRna) inside the locus span on the same strand
-ENCODE HepG2 features (encode.py): nuclear enrichment (M3, M4) and its negative (M5), eCLIP by nuclear (M4) and
-cytoplasmic (M5) RBPs (eclip.py; loci expressed in HepG2, TPM >= ECLIP_MIN_TPM, without a bound RBP have
-enrichment 0, i.e. no evidence either way; loci not expressed in HepG2 are missing); M5 has no other features.
+Nuclear vs cytoplasmic enrichment enters M5 only: it is the defining property of a cytoplasmic RNA, whereas cis
+(M3) and nuclear trans (M4) RNAs are both nuclear, so the same feature cannot tell them apart and would only
+anti-correlate M3 and M4 with M5. eCLIP (eclip.py): loci expressed in HepG2 (TPM >= ECLIP_MIN_TPM) without a bound
+RBP have enrichment 0, i.e. no evidence either way; loci not expressed in HepG2 are missing.
+
+Ranking adjustments (class_table):
+  - copy attribution: the features of COPY_WEIGHTED (translation, P-site share, sequence features, conservation),
+    which a paralogous copy can supply as well as this one, are pulled toward 0.5 in proportion to 1 - the
+    copy-attribution confidence (qc.py), and reported as pct_<feature>_weighted;
+  - ORF length and HepG2 expression: features that rise or fall with ORF length (LENGTH_DEPENDENT) or with HepG2
+    expression (EXPRESSION_DEPENDENT) are ranked among ORFs of similar length / expression (quantile bins of the
+    background; joint bins for a feature in both), so that the classes do not reward length or expression as such.
+    The lists come from the Spearman correlation (locus-weighted, |rho| > 0.15 for length, > 0.3 for expression)
+    over all ORFs of run v2. M4 abundance is itself the expression and is ranked as it is.
 Features of a step that has not been run (ENCODE, chromatin at the TSS, sequence features, PhyloP contrast, CRISPR
 screens) are missing; scoring.composite shrinks missing features to 0.5.
 """
@@ -29,23 +41,30 @@ import pandas as pd
 from . import quant, scoring
 
 CLASSES = {
-    "M1": ["m1_translation", "m1_orf_share", "m1_peptides", "m1_independent_translation", "m1_phylocsf_weighted",
-           "m1_phylop_contrast_weighted", "m1_sequence_features", "m1_crispr_screen"],
+    "M1": ["m1_translation_weighted", "m1_orf_share_weighted", "m1_peptides", "m1_independent_translation",
+           "m1_phylocsf_weighted", "m1_phylop_contrast_weighted", "m1_sequence_features_weighted",
+           "m1_crispr_screen"],
     "M2": ["m2_nmd", "m2_nmd_sensitivity"],
-    "M3": ["m3_neighbour_position", "m3_low_polysome", "m3_coexpression", "m3_nuclear", "m3_enhancer_chromatin"],
-    "M4": ["m4_copy_number", "m4_nuclear", "m4_eclip_nuclear"],
+    "M3": ["m3_neighbour_position", "m3_low_polysome", "m3_coexpression", "m3_enhancer_chromatin"],
+    "M4": ["m4_abundance", "m4_eclip_nuclear"],
     "M5": ["m5_cytoplasmic", "m5_eclip_cytoplasmic"],
     "M6": ["m6_small_rna_host"],
 }
-# M1 features correlated with ORF length (Spearman 0.16-0.54 over all ORFs), ranked within length bins
+# features that a paralogous copy can supply: pulled toward 0.5 by 1 - copy attribution (class_table)
+COPY_WEIGHTED = ("m1_translation", "m1_orf_share", "m1_sequence_features", "m1_phylocsf", "m1_phylop_contrast")
+# ranked within ORF-length bins (locus-weighted Spearman with length 0.19-0.56 in run v2)
 LENGTH_DEPENDENT = ("m1_translation", "m1_orf_share", "m1_sequence_features", "m1_phylocsf")
-LENGTH_BINS = 5
-# conservation features count in proportion to the copy-attribution confidence (class_table)
-CONSERVATION = ("m1_phylocsf", "m1_phylop_contrast")
+LENGTH_BINS = 20       # quantile bins: the top bin (>= ~130 aa) still holds 5% of the ORFs
+# ranked within HepG2-expression bins (locus-weighted Spearman with log2 TPM HepG2 0.34-0.44 in absolute value)
+EXPRESSION_DEPENDENT = ("m1_phylocsf", "m2_nmd_sensitivity", "m3_low_polysome")
+EXPRESSION = "m4_abundance"      # the feature that defines the expression bins
+EXPRESSION_BINS = 5
 # columns of features() that are not themselves features
 NOT_FEATURES = ("copy_attribution", "orf_length")
 NMD_STOP_DISTANCE = 50   # nt between stop codon and last exon junction (the 50-55 nt rule)
-DOMINANCE_MARGIN = 0.5   # standard normal units of the rank-based standardized class scores
+# a class is dominant if its z exceeds the next class's by this many standard normal units (half an SD: the
+# top class must be clearly ahead, not ahead by rank noise)
+DOMINANCE_MARGIN = 0.5
 ECLIP_MIN_TPM = 1.0      # loci below this HepG2 TPM cannot show eCLIP binding: eCLIP features missing
 DIVERGENT_DISTANCE = 5000
 NEIGHBOUR_MAX_DISTANCE = 100_000
@@ -227,7 +246,7 @@ def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=No
              chromatin=None, peptide_feats=None, orf_support=None, nmd=None):
     """
     Raw feature values per ORF (index of `orfs`), grouped by class, plus two columns that are not features
-    (NOT_FEATURES: copy_attribution weights the conservation features, orf_length defines the length bins).
+    (NOT_FEATURES: copy_attribution weights the COPY_WEIGHTED features, orf_length defines the length bins).
     `stop_dist`: stop codon to last exon junction (nt, stop_to_last_junction); `position`, `small_rna`, `coexpr`:
     per locus; `encode`, `eclip`, `chromatin`, `nmd`: locus tables of encode.features, eclip.features,
     chromatin.features, nmd.sensitivity; `peptide_feats`, `orf_support`: ORF tables (index orf_id) of the
@@ -247,7 +266,6 @@ def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=No
     def per_orf(table, col):             # a column of an ORF table indexed by orf_id
         return table.reindex(orfs["orf_id"])[col].astype(float).to_numpy()
 
-    nuclear = per_locus(encode, "nuclear_log2ratio")
     f["copy_attribution"] = qc_table["copy_attribution"].to_numpy()
     f["orf_length"] = orf_col("n_aa")
 
@@ -275,16 +293,14 @@ def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=No
     f["m3_neighbour_position"] = per_locus(position)
     f["m3_low_polysome"] = -orf_col("MRL_pct_vs_mRNA")
     f["m3_coexpression"] = per_locus(coexpr)
-    f["m3_nuclear"] = nuclear
     f["m3_enhancer_chromatin"] = per_locus(chromatin, "enhancer_score")
 
     # M4 nuclear trans, M5 cytoplasmic trans
-    f["m4_copy_number"] = orf_col("log2TPM_HepG2")
-    f["m4_nuclear"] = nuclear
-    f["m5_cytoplasmic"] = -nuclear
+    f["m4_abundance"] = orf_col("log2TPM_HepG2")
+    f["m5_cytoplasmic"] = -per_locus(encode, "nuclear_log2ratio")
     # eclip.features leaves loci without a bound RBP missing; for loci expressed in HepG2 that is an observation
     # (no RBP bound: enrichment 0 by its formula), for the others there is nothing to observe
-    expressed = (2 ** orf_col("log2TPM_HepG2") >= ECLIP_MIN_TPM).to_numpy()
+    expressed = (orf_col("log2TPM_HepG2") >= np.log2(ECLIP_MIN_TPM)).to_numpy()   # Sanity log2 TPM, no pseudocount
     for feat, col in (("m4_eclip_nuclear", "eclip_nuclear_enrichment"),
                       ("m5_eclip_cytoplasmic", "eclip_cytoplasmic_enrichment")):
         if eclip is None:
@@ -297,11 +313,12 @@ def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=No
     return f
 
 
-def length_bins(length, is_background, n_bins=LENGTH_BINS):
-    """Bin index (0..n_bins-1) of each ORF length, bins at the quantiles of the background lengths."""
-    length = np.asarray(length, dtype=float)
-    edges = np.quantile(length[np.asarray(is_background, dtype=bool)], np.linspace(0, 1, n_bins + 1)[1:-1])
-    return np.searchsorted(edges, length, side="right")
+def quantile_bins(values, is_background, n_bins):
+    """Bin index (0..n_bins-1) of each value, bins at the quantiles of the background values; missing values -1."""
+    v = np.asarray(values, dtype=float)
+    ref = v[np.asarray(is_background, dtype=bool) & ~np.isnan(v)]
+    edges = np.quantile(ref, np.linspace(0, 1, n_bins + 1)[1:-1])
+    return np.where(np.isnan(v), -1, np.searchsorted(edges, v, side="right"))
 
 
 def percentile_within_bins(values, bins, is_background, weights):
@@ -319,15 +336,21 @@ def class_table(feats, is_background, locus_ids, margin=DOMINANCE_MARGIN):
     """
     Percentiles, class scores, coverage, standardized class scores (_z) and dominant class. Background ORFs are
     weighted by 1 / number of ORFs of their locus (`locus_ids`), as locus-level features are copied to every ORF.
-    LENGTH_DEPENDENT features are ranked within ORF-length bins; the CONSERVATION features are reported as
-    pct_<feature>_weighted, pulled toward 0.5 in proportion to 1 - copy-attribution confidence.
+    LENGTH_DEPENDENT / EXPRESSION_DEPENDENT features are ranked within ORF-length / HepG2-expression bins (joint
+    bins for features in both); COPY_WEIGHTED features are reported as pct_<feature>_weighted, pulled toward 0.5
+    in proportion to 1 - copy-attribution confidence.
     """
     bg = np.asarray(is_background, dtype=bool)
     w = scoring.locus_weights(locus_ids)
-    bins = length_bins(feats["orf_length"], bg)
+    length_bin = quantile_bins(feats["orf_length"], bg, LENGTH_BINS)
+    expression_bin = (quantile_bins(feats[EXPRESSION], bg, EXPRESSION_BINS) if EXPRESSION in feats
+                      else np.zeros(len(feats), dtype=int))
 
     def percentile(c):
-        if c in LENGTH_DEPENDENT:
+        # one index per (length bin, expression bin); expression bin -1 (missing) is a bin of its own
+        bins = (length_bin * (c in LENGTH_DEPENDENT) * (EXPRESSION_BINS + 1)
+                + (expression_bin + 1) * (c in EXPRESSION_DEPENDENT))
+        if c in LENGTH_DEPENDENT or c in EXPRESSION_DEPENDENT:
             return percentile_within_bins(feats[c], bins, bg, w)
         return scoring.percentile_vs_background(feats[c], feats.loc[bg, c], w[bg])
 
@@ -335,7 +358,7 @@ def class_table(feats, is_background, locus_ids, margin=DOMINANCE_MARGIN):
     for c in feats.columns:
         if c in NOT_FEATURES:
             continue
-        if c in CONSERVATION:
+        if c in COPY_WEIGHTED:
             pct[f"{c}_weighted"] = 0.5 + (percentile(c) - 0.5) * feats["copy_attribution"].to_numpy()
         else:
             pct[c] = percentile(c)
@@ -343,6 +366,7 @@ def class_table(feats, is_background, locus_ids, margin=DOMINANCE_MARGIN):
     z = scoring.standardized(scores, bg, coverage, w)
     out = pd.concat([pct.add_prefix("pct_"), scores.add_suffix("_score"), coverage.add_suffix("_coverage"),
                      z.add_suffix("_z")], axis=1)
-    out["length_bin"] = bins
+    out["length_bin"] = length_bin
+    out["expression_bin"] = expression_bin
     out["dominant_class"] = scoring.dominant_class(z, margin)
     return out

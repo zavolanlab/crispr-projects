@@ -1,7 +1,9 @@
 """
 Public resources used by lincdisease: URLs, cached download and readers. Files are downloaded once into the
 data directory (--data-dir; never into the repository) and re-used. Every download is recorded in
-<directory>/downloads.tsv (date, file, URL, size, md5), as some URLs (GWAS Catalog `latest`) change over time.
+<directory>/downloads.tsv (date, file, URL, size, md5). URLs name a fixed release where the source has one;
+HGNC has only the changing current set (monthly archives are not the same file), so its download record is the
+version that was used.
 """
 import datetime
 import gzip
@@ -23,8 +25,9 @@ URLS = {
     # snoRNABase / miRBase small RNAs (includes snoRNAs missing from GENCODE, e.g. those hosted by GAS5)
     "wgrna": "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/wgRna.txt.gz",
     "gencode_gtf": GENCODE42 + "gencode.v42.annotation.gtf.gz",
+    # current set (v2: downloaded 2026-10-30, md5 39d46ee3ced2310056ec206019b67425)
     "hgnc": "https://storage.googleapis.com/public-download-files/hgnc/tsv/tsv/hgnc_complete_set.txt",
-    "gwas_catalog": "https://ftp.ebi.ac.uk/pub/databases/gwas/releases/latest/"
+    "gwas_catalog": "https://ftp.ebi.ac.uk/pub/databases/gwas/releases/2026/10/22/"
                     "gwas-catalog-associations_ontology-annotated-full.zip",
     # TCGA Pan-Cancer Clinical Data Resource (Liu et al. 2018), survival endpoints
     "tcga_cdr": "https://api.gdc.cancer.gov/data/1b5f413e-a8d1-4d10-92eb-7c4ae739ed81",
@@ -46,6 +49,7 @@ FILENAMES = {"tcga_cdr": "TCGA-CDR-SupplementalTableS1.xlsx",
 
 # files placed in the data directory by hand (no stable direct URL, or extracted from a larger archive):
 # path relative to the data directory -> where to get it
+# UniProt keeps only the current reference proteomes (v2: release 2026_03)
 UNIPROT_HUMAN = ("https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/reference_proteomes/"
                  "Eukaryota/UP000005640/")
 PRENSNER = "Prensner et al. 2021 (Nat Biotechnol), PMC supplement NIHMS1698134"
@@ -57,7 +61,7 @@ MANUAL = {
     "homology/UP000005640_9606_additional.fasta.gz": UNIPROT_HUMAN + "UP000005640_9606_additional.fasta.gz",
     "riboseq_orfs/phase1/Ribo-seq_ORFs.peptideins.bed": "https://www.gencodegenes.org/pages/riboseq_orfs/ (phase 1)",
     "riboseq_orfs/phase2/Ribo-seq_ORFs.comprehensive.bed": "https://www.gencodegenes.org/pages/riboseq_orfs/ (phase 2)",
-    "Pfam-A.hmm": "https://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.hmm.gz (gunzip)",
+    "Pfam-A.hmm": "https://ftp.ebi.ac.uk/pub/databases/Pfam/releases/Pfam38.2/Pfam-A.hmm.gz (gunzip)",
     "crispr_screens/NIHMS1698134-supplement-Supplementary_Tables_1-17.xlsx": PRENSNER,
     "crispr_screens/NIHMS1698134-supplement-Supplementary_Tables_21-32.xlsx": PRENSNER,
     **{f"crispr_screens/aay0262_table_{n}.xlsx": "Chen et al. 2020 (Science, doi 10.1126/science.aay0262), "

@@ -43,15 +43,24 @@ def test_specific_peptides():
     assert p["copy_specific"].to_dict() == {"o1": True, "o2": True, "o3": False}
 
 
-def test_class_table_phylocsf_weighting():
-    feats = pd.DataFrame({c: [0.0, 1.0] for cols in mechanism.CLASSES.values() for c in cols})
+def _feature_table(values):
+    """A features() table: every class feature (raw names, without _weighted) set to `values`."""
+    names = {c.removesuffix("_weighted") for cols in mechanism.CLASSES.values() for c in cols}
+    return pd.DataFrame({c: values for c in sorted(names)})
+
+
+def test_class_table_copy_weighting():
+    feats = _feature_table([0.0, 1.0])
     feats["m1_phylocsf"] = [0.0, 10.0]
+    feats["m1_translation"] = [0.0, 10.0]
     feats["copy_attribution"] = [1.0, 0.0]
     feats["orf_length"] = [20.0, 20.0]
-    res = mechanism.class_table(feats.drop(columns=["m1_phylocsf_weighted"]), pd.Series([True, True]),
-                                ["L1", "L2"])
-    assert res.loc[1, "pct_m1_phylocsf_weighted"] == pytest.approx(0.5)   # no attribution -> neutral
-    assert res.loc[0, "pct_m1_phylocsf_weighted"] == pytest.approx(0.25)
+    feats["m4_abundance"] = [1.0, 1.0]                  # same length and expression bin
+    res = mechanism.class_table(feats, pd.Series([True, True]), ["L1", "L2"])
+    for c in ("pct_m1_phylocsf_weighted", "pct_m1_translation_weighted"):
+        assert res.loc[1, c] == pytest.approx(0.5)     # no attribution -> neutral
+        assert res.loc[0, c] == pytest.approx(0.25)
+    assert "pct_m1_translation" not in res
 
 
 def test_small_rna_hosts_dedupes_sources():
@@ -89,6 +98,25 @@ def test_length_dependent_features_ranked_within_length_bins():
                           "m1_orf_share": length + rng.normal(0, 1, n),     # length-driven
                           "m1_peptides": length})                         # not in LENGTH_DEPENDENT
     res = mechanism.class_table(feats, pd.Series(True, index=feats.index), [f"L{i}" for i in range(n)])
-    assert stats.spearmanr(res["pct_m1_orf_share"], length)[0] < 0.5
+    assert stats.spearmanr(res["pct_m1_orf_share_weighted"], length)[0] < 0.5
     assert stats.spearmanr(res["pct_m1_peptides"], length)[0] > 0.99
     assert res["length_bin"].nunique() == mechanism.LENGTH_BINS
+
+
+def test_expression_dependent_features_ranked_within_expression_bins():
+    from scipy import stats
+    rng = np.random.default_rng(0)
+    n = 500
+    tpm = rng.normal(3, 2, n)
+    feats = pd.DataFrame({"orf_length": 50.0, "copy_attribution": 1.0, "m4_abundance": tpm,
+                          "m3_low_polysome": -tpm + rng.normal(0, 0.1, n),   # expression-driven
+                          "m3_coexpression": -tpm})                          # not in EXPRESSION_DEPENDENT
+    res = mechanism.class_table(feats, pd.Series(True, index=feats.index), [f"L{i}" for i in range(n)])
+    assert abs(stats.spearmanr(res["pct_m3_low_polysome"], tpm)[0]) < 0.5
+    assert stats.spearmanr(res["pct_m3_coexpression"], tpm)[0] < -0.99
+    assert res["expression_bin"].nunique() == mechanism.EXPRESSION_BINS
+
+
+def test_quantile_bins_missing_values():
+    bins = mechanism.quantile_bins([1.0, 2.0, np.nan, 4.0], [True] * 4, 2)
+    assert bins[2] == -1 and set(bins[[0, 1, 3]]) <= {0, 1}

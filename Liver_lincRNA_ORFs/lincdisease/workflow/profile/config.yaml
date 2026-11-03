@@ -14,7 +14,7 @@ resources:
 jobs: 40                    # Slurm jobs at a time
 local-cores: 8              # login-node jobs at a time
 latency-wait: 120           # seconds to wait for files on the shared file system
-retries: 1                  # one retry, with double memory (mem() in the Snakefile)
+retries: 1                  # one retry, with double memory and time (mem(), minutes() in the Snakefile)
 keep-going: true            # independent steps go on when one fails
 rerun-incomplete: true
 printshellcmds: true

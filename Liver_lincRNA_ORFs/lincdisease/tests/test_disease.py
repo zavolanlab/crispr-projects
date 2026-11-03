@@ -13,10 +13,25 @@ def test_rank_biserial_extremes():
 
 
 def test_paired_rank_biserial():
-    r, _ = disease.paired_rank_biserial([1, 2, 3, 0])
+    r, _ = disease.paired_rank_biserial([1, 2, 3])
     assert r == pytest.approx(1.0)
     r, _ = disease.paired_rank_biserial([1, -1])
     assert r == pytest.approx(0.0)
+    # zeros are kept (Pratt): ranks 1.5, 1.5 for the zeros, 3, 4 for the positive differences
+    r, _ = disease.paired_rank_biserial([0, 0, 1, 2])
+    assert r == pytest.approx(7 / 10)
+    assert np.isnan(disease.paired_rank_biserial([0, 0])[0])
+
+
+def test_d1_hcc_detection_filter():
+    s = _samples()
+    cols = s["sample_id"]
+    rare = pd.Series(0.0, index=cols)
+    rare[["t0", "t1"]] = 5.0                      # detected in 2 of the 20 paired samples
+    expr = pd.DataFrame([np.log2(rare + 0.05)], index=["rare"], columns=cols)
+    ncov = pd.DataFrame([rare], index=["rare"], columns=cols)
+    assert np.isnan(disease.d1_hcc(expr, s, ncov=ncov).loc["rare", "D1_HCC"])
+    assert disease.d1_hcc(expr, s).loc["rare", "D1_HCC"] == pytest.approx(19 / 55)   # untested without ncov
 
 
 def _samples(n_pat=30, n_gtex=30):
@@ -103,6 +118,17 @@ def test_hcc_and_chronic_scores_and_direction():
     res = integrate.disease_score(stats, pd.Series(True, index=stats.index))
     assert res.loc[0, "hcc_direction"] == "oncogene-like" and res.loc[1, "hcc_direction"] == "suppressor-like"
     # magnitude is ranked: down-regulated loci score as high as up-regulated ones
-    assert res.loc[1, "comp_D1_HCC"] == pytest.approx(res.loc[0, "comp_D1_HCC"])
+    assert res.loc[0, "comp_D1_HCC"] > 0.99 and res.loc[1, "comp_D1_HCC"] > 0.99
     assert res.loc[2, "chronic_direction"] == "down" and res.loc[2, "comp_D1_chronic"] > 0.99
     assert res["hcc_score"].between(0, 1).all() and res["chronic_score"].between(0, 1).all()
+
+
+def test_d1_hcc_and_d2_centred_on_background():
+    from lincdisease import integrate
+    rng = np.random.default_rng(4)
+    stats = pd.DataFrame({"D1_HCC": rng.normal(0.3, 0.1, 200), "D2": rng.normal(1.0, 0.5, 200)})
+    stats.loc[0] = [0.3, 1.0]           # at the common shift: no locus-specific signal
+    stats.loc[1] = [-0.1, -0.5]         # below it: down relative to the background
+    res = integrate.disease_score(stats, pd.Series(True, index=stats.index))
+    assert res.loc[0, "pct_D1_HCC"] < 0.1 and res.loc[0, "pct_D2"] < 0.1
+    assert res.loc[1, "pct_D1_HCC"] > 0.9 and res.loc[1, "hcc_direction"] == "suppressor-like"

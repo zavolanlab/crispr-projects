@@ -93,7 +93,12 @@ def tm_segments(seq, window=TM_WINDOW, threshold=TM_THRESHOLD):
 
 
 def signal_like(seq, h_window=8, h_threshold=2.0, h_start_max=20, max_cleavage=40):
-    """Heuristic signal-peptide-like N-terminus (see module docstring)."""
+    """
+    Heuristic signal-peptide-like N-terminus (see module docstring). Defaults follow the typical anatomy of
+    secretory signal peptides: an h-region of `h_window` residues with mean Kyte-Doolittle hydropathy >=
+    `h_threshold`, starting before residue `h_start_max`, and a cleavage site within the first `max_cleavage`
+    residues (signal peptides are mostly 15-30 residues long).
+    """
     s = seq.rstrip("*")
     h = hydropathy(s[:h_start_max + h_window], h_window)
     for i in np.flatnonzero(h >= h_threshold):

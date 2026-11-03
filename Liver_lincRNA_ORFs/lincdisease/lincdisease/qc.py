@@ -1,6 +1,7 @@
 """
 Quality-check layer (LOGIC.md, Step 1): flags, copy-attribution confidence and confidence tier per ORF.
-Flags never remove ORFs and never change scores; copy-attribution confidence weights PhyloCSF in M1.
+Flags never remove ORFs and never change scores; copy-attribution confidence weights the M1 features a paralogous
+copy can supply (translation, P-site share, sequence features, conservation: mechanism.COPY_WEIGHTED).
 
 Copy-attribution confidence (0..1) applies to ORFs in segmental duplications / falsely duplicated GRCh38
 regions or with homology to annotated proteins (other ORFs get 1). It is the mean of the available parts:

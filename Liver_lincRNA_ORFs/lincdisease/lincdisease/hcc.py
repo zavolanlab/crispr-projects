@@ -16,8 +16,8 @@ feature: matched-pairs rank-biserial correlation r of log2(ncov + pseudocount), 
 patient, and Wilcoxon signed-rank p (as D1 HCC paired); features detected (ncov > 0) in < MIN_DETECTED of the
 cohort's samples are not tested there. Combined over cohorts:
 hcc_rep_r = mean r weighted by the number of pairs, Stouffer z (signed z from the two-sided p, weights sqrt(pairs)),
-p and BH-FDR over features. `hcc_replicated` (replicated): same sign as D1 HCC and combined FDR < 0.05; missing where
-no cohort tested the feature.
+p and BH-FDR over features. `hcc_replicated` (replicated): combined FDR < 0.05 and on the same side of the background
+median as D1 HCC (both centred, as D1 HCC is for scoring); missing where no cohort tested the feature.
 """
 import re
 
@@ -75,10 +75,16 @@ def size_factors(genes, samples):
                       for _, g in s.groupby("cohort")])
 
 
-def replicated(rep, d1_hcc):
-    """True / False per feature of `rep` (replication()): same sign as D1 HCC and combined FDR < 0.05; missing where
-    no replication cohort tested the feature."""
-    same = np.sign(rep["hcc_rep_r"]) == np.sign(d1_hcc.reindex(rep.index))
+def replicated(rep, d1_hcc, is_background):
+    """
+    True / False per feature of `rep` (replication()): combined FDR < 0.05 and hcc_rep_r and D1 HCC on the same side
+    of their background medians (as D1 HCC is centred for scoring, integrate.CENTRED: a locus that only follows the
+    common shift up in tumours does not replicate a locus-specific change); missing where no replication cohort
+    tested the feature. `is_background`: boolean Series over the features of `rep`.
+    """
+    d1 = d1_hcc.reindex(rep.index)
+    bg = is_background.reindex(rep.index).fillna(False).astype(bool)
+    same = np.sign(rep["hcc_rep_r"] - rep.loc[bg, "hcc_rep_r"].median()) == np.sign(d1 - d1[bg].median())
     return (same & (rep["hcc_rep_fdr"] < 0.05)).astype(object).where(rep["hcc_rep_fdr"].notna())
 
 

@@ -62,7 +62,7 @@ def d4(spans, assoc, flank=50_000):
         rec = {"feature_id": fid, "gwas_disease_max": 0.0, "gwas_hcc_max": 0.0, "gwas_chronic_max": 0.0,
                "gwas_enzyme_max": 0.0, "gwas_n": 0, "gwas_top_trait": "", "gwas_top_snp": ""}
         if g is not None:
-            lo, hi = r["start0"] - flank, r["end1"] + flank
+            lo, hi = r["start0"] + 1 - flank, r["end1"] + flank       # 1-based positions of the span +- flank
             pos = g["pos"].to_numpy()
             w = g.iloc[np.searchsorted(pos, lo, "left"):np.searchsorted(pos, hi, "right")]
             if len(w):

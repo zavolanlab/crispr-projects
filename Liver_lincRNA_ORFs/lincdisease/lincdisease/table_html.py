@@ -19,6 +19,8 @@ COLUMNS = [
     ("ORF", "n_aa", "Length (aa)", "int", "ORF length in amino acids"),
     ("ORF", "ribo_evidence", "Ribo-seq", "text", "translation evidence class from lincorfz"),
 
+    ("Summary scores", "disease_score_noD5", "Disease score w/o D5", "score",
+     "disease score without prior literature (D5): the headline score, unbiased by how well studied a locus is"),
     ("Summary scores", "hcc_score", "HCC score", "score",
      "D1 HCC 0.25, D2 0.25, D3 0.20, D4 HCC 0.10, D5 HCC 0.10, D6 0.10; 0.5 = typical lincRNA"),
     ("Summary scores", "chronic_score", "Chronic score", "score",
@@ -40,7 +42,6 @@ COLUMNS = [
     ("Disease components", "comp_D4", "D4", "score", "liver-trait GWAS within +-50 kb (percentile)"),
     ("Disease components", "comp_D5", "D5", "score", "liver literature, Europe PMC (percentile)"),
     ("Disease components", "comp_D6", "D6", "score", "liver context: GTEx liver level and specificity, HepG2/Huh7 (percentile)"),
-    ("Disease components", "disease_score_noD5", "Disease score w/o D5", "score", "disease score without prior literature"),
     ("Disease components", "disease_direction", "Disease direction", "text", "oncogene-like / suppressor-like / inconsistent / none"),
     ("Disease components", "hcc_coverage", "HCC coverage", "score", "fraction of the HCC score weight with data"),
     ("Disease components", "chronic_coverage", "Chronic coverage", "score", "fraction of the chronic score weight with data"),
@@ -124,23 +125,26 @@ COLUMNS = [
      "mean PhyloP100way over the ORF minus over the rest of the transcript's exons"),
 
     *[("Mechanism features (percentiles)", f"pct_{f}", lab, "score", desc) for f, lab, desc in [
-        ("m1_translation", "M1 translation", "pooled log10 Bayes factor of translation (within length bin)"),
-        ("m1_orf_share", "M1 ORF P-site share", "fraction of the transcript's P-sites in the ORF (within length bin)"),
+        ("m1_translation_weighted", "M1 translation",
+         "pooled log10 Bayes factor of translation (within length bin, weighted by copy attribution)"),
+        ("m1_orf_share_weighted", "M1 ORF P-site share",
+         "fraction of the transcript's P-sites in the ORF (within length bin, weighted by copy attribution)"),
         ("m1_peptides", "M1 peptides", "identified peptides (proteomics + HLA-I)"),
         ("m1_independent_translation", "M1 GENCODE Ribo-seq", "same stop as a GENCODE Ribo-seq ORF (+ peptide support)"),
-        ("m1_phylocsf_weighted", "M1 PhyloCSF", "within length bin, weighted by copy-attribution confidence"),
+        ("m1_phylocsf_weighted", "M1 PhyloCSF",
+         "within length and HepG2-expression bin, weighted by copy-attribution confidence"),
         ("m1_phylop_contrast_weighted", "M1 PhyloP contrast", "ORF minus exon PhyloP, weighted by copy attribution"),
-        ("m1_sequence_features", "M1 sequence", "TM / signal-like / Pfam, and order (within length bin)"),
+        ("m1_sequence_features_weighted", "M1 sequence",
+         "TM / signal-like / Pfam, and order (within length bin, weighted by copy attribution)"),
         ("m1_crispr_screen", "M1 CRISPR", "screen value"),
         ("m2_nmd", "M2 NMD", "stop > 50 nt upstream of the last exon junction"),
-        ("m2_nmd_sensitivity", "M2 NMD sensitivity", "mean log2FC upon UPF1 and SMG6 + SMG7 knock-down (HeLa)"),
+        ("m2_nmd_sensitivity", "M2 NMD sensitivity",
+         "mean log2FC upon UPF1 and SMG6 + SMG7 knock-down (HeLa; within HepG2-expression bin)"),
         ("m3_neighbour_position", "M3 position", "divergent or antisense to a protein-coding gene"),
         ("m3_coexpression", "M3 co-expression", "excess co-expression with the nearest coding gene"),
-        ("m3_nuclear", "M3 nuclear", "HepG2 nuclear enrichment"),
         ("m3_enhancer_chromatin", "M3 enhancer", "enhancer-like chromatin at the TSS"),
-        ("m3_low_polysome", "M3 low polysome", "low mean ribosome load"),
-        ("m4_copy_number", "M4 copy number", "HepG2 TPM"),
-        ("m4_nuclear", "M4 nuclear", "HepG2 nuclear enrichment"),
+        ("m3_low_polysome", "M3 low polysome", "low mean ribosome load (within HepG2-expression bin)"),
+        ("m4_abundance", "M4 abundance", "HepG2 log2 TPM"),
         ("m4_eclip_nuclear", "M4 eCLIP nuclear", "binding by nuclear RBPs"),
         ("m5_cytoplasmic", "M5 cytoplasmic", "HepG2 cytoplasmic enrichment"),
         ("m5_eclip_cytoplasmic", "M5 eCLIP cytoplasmic", "binding by cytoplasmic RBPs"),
@@ -188,12 +192,13 @@ INDEX = [
         ("D6", "Liver context: expression level and specificity in GTEx liver, and in HepG2/Huh7."),
     ]),
     ("Mechanism classes (per ORF)", [
-        ("M1", "Encoded peptide: translation strength, peptides, conservation (copy-weighted), sequence "
-               "features, CRISPR screens; length-dependent features ranked within ORF-length bins."),
+        ("M1", "Encoded peptide: translation strength, peptides, conservation, sequence features, CRISPR "
+               "screens; features a paralogous copy can supply are weighted by copy attribution, length-dependent "
+               "ones ranked within ORF-length bins."),
         ("M2", "Translation-coupled RNA regulation: NMD substrate, measured NMD sensitivity."),
         ("M3", "Cis-regulation of a neighbour: divergent/antisense position, excess co-expression with the nearest "
-               "coding gene, nuclear enrichment, enhancer-like chromatin, low polysome association."),
-        ("M4", "Trans-acting nuclear RNA: nuclear enrichment, abundance, binding by nuclear RBPs."),
+               "coding gene, enhancer-like chromatin, low polysome association."),
+        ("M4", "Trans-acting nuclear RNA: abundance, binding by nuclear RBPs."),
         ("M5", "Trans-acting cytoplasmic RNA: cytoplasmic enrichment, binding by cytoplasmic RBPs."),
         ("M6", "Small-RNA host: snoRNA, scaRNA or miRNA genes in the locus."),
         ("Scores and dominance", "Class score = mean of its feature percentiles (absolute evidence; classes are "
@@ -216,7 +221,7 @@ def rows(orfs, support, mechanism, disease, peptides, hla, min_screen=1):
     cand = t["is_candidate"].astype(bool)
     screen = t["crispr_screen_value"].ge(min_screen)
     t["set"] = np.select([cand & screen, cand], ["both", "candidate"], "screen")
-    return t[cand | screen].sort_values("hcc_score", ascending=False)
+    return t[cand | screen].sort_values("disease_score_noD5", ascending=False)
 
 
 def _value(v, kind):
@@ -344,7 +349,7 @@ const META = __META__;
 const DATA = __DATA__;
 const groups = [...new Set(META.map(m => m.group))];
 const hidden = new Set(["Mechanism z", "Mechanism features (percentiles)", "QC detail", "Identifiers"]);
-let sortCol = META.findIndex(m => m.col === "hcc_score"), sortDir = -1, setFilter = "all", query = "";
+let sortCol = META.findIndex(m => m.col === "disease_score_noD5"), sortDir = -1, setFilter = "all", query = "";
 const setIdx = META.findIndex(m => m.col === "set");
 
 function fmt(v, kind) {

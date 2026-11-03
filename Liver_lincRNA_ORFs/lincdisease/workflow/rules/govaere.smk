@@ -38,7 +38,7 @@ rule star_index:
            gtf=ancient(f"{DATA}/gencode.v42.annotation.gtf.gz")
     output: fa=GENOME, fai=GENOME + ".fai", sa=f"{GOV_REF}/star_v42_oh75/SA"
     threads: 8
-    resources: mem_mb=64000, runtime=240
+    resources: mem_mb=64000, runtime=minutes(240)
     log: f"{GOV_DIR}/logs/star_index.log"
     shell:
         """
@@ -62,7 +62,7 @@ rule govaere_align:
             counts=f"{GOV_DIR}/counts/{{run}}.ReadsPerGene.tsv", star_log=f"{GOV_DIR}/star_logs/{{run}}.Log.final.out",
             sj=f"{GOV_DIR}/star_logs/{{run}}.SJ.out.tab", ok=f"{GOV_DIR}/cram/{{run}}.ok"
     threads: 8
-    resources: mem_mb=64000, runtime=240     # 48 GB ran out of memory on some runs
+    resources: mem_mb=64000, runtime=minutes(240)     # 48 GB ran out of memory on some runs
     priority: 10          # align what is on disk before downloading more
     log: f"{GOV_DIR}/logs/align/{{run}}.log"
     shell:
@@ -77,7 +77,7 @@ rule govaere_locus_cov:
     input: ok=f"{GOV_DIR}/cram/{{run}}.ok", regions=ancient("quant/regions.tsv"), fa=ancient(GENOME)
     output: f"{GOV_DIR}/locus_cov/{{run}}.tsv"
     threads: 2
-    resources: mem_mb=mem(4), runtime=30
+    resources: mem_mb=mem(4), runtime=minutes(30)
     log: f"{GOV_DIR}/logs/locus_cov/{{run}}.log"
     shell: "bash {SCRIPTS}/govaere_locus_cov.sh {GOV_DIR} {input.regions} {input.fa} '{GOV[modules]}' {wildcards.run} "
            "> {log} 2>&1"

@@ -8,10 +8,12 @@ of ORFs of its locus) of three parts: the locus' tumour specificity, the number 
 immunopeptides, and the predicted HLA-I presentation (MHCflurry; distinct binder peptides over the HepG2, Huh7 and
 common alleles; missing where the peptide step has not been run).
 """
+import operator
+
 import numpy as np
 import pandas as pd
 
-from . import scoring
+from . import controls, scoring
 
 ACTIONABILITY = ["tumour_specificity", "n_hla_specific", "hla_binding"]
 
@@ -32,7 +34,7 @@ def actionability(orfs, disease_loci, peptides, hla_table=None):
 
 def orf_table(orfs, qc_table, disease_loci, mech, act):
     """lincdisease.orfs.tsv: ORF identity, QC, the locus' disease columns, actionability and mechanism scores."""
-    keep_disease = ["disease_score", "disease_coverage", "disease_score_noD5", "disease_direction",
+    keep_disease = ["disease_score_noD5", "disease_score", "disease_coverage", "disease_direction",
                     "hcc_score", "hcc_coverage", "hcc_direction", "chronic_score", "chronic_coverage",
                     "chronic_direction",
                     "comp_D1", "comp_D2", "comp_D3", "comp_D4", "comp_D5", "comp_D6",
@@ -71,89 +73,66 @@ def screen_supported(table, support):
     out = out[out["crispr_screen_value"] >= 1]
     key = out["confidence_tier"].map(TIER_ORDER)
     return (out.assign(_tier=key)
-            .sort_values(["crispr_screen_value", "_tier", "disease_score"], ascending=[False, True, False])
+            .sort_values(["crispr_screen_value", "_tier", "disease_score_noD5"], ascending=[False, True, False])
             .drop(columns="_tier"))
 
 
-def _row(feature, score, value, expectation, passed):
-    return {"control": feature, "score": score, "value": value, "expectation": expectation,
-            "pass": passed if passed is not None else np.nan}
+OPERATORS = {">": operator.gt, ">=": operator.ge, "<": operator.lt, "<=": operator.le, "==": operator.eq}
+
+
+def _format(v):
+    return f"{v:.3g}" if isinstance(v, (float, np.floating)) else str(v)
+
+
+def _missing(v):
+    return v is None or (not isinstance(v, str) and pd.isna(v))
 
 
 def control_report(disease_loci, mech_by_locus_name, hla_control=None):
-    """Check the control expectations of LOGIC.md Step 5 that the current inputs can evaluate."""
+    """
+    Evaluate the checks of controls.PANEL (LOGIC.md Step 5): one row per check with the values used, the
+    expectation (from the check's conditions) and pass (True / False; missing = not evaluated: the control or
+    one of its values is missing).
+    """
     d = disease_loci
-
-    def g(gene, col):
-        return d.loc[f"ctrl:{gene}", col] if f"ctrl:{gene}" in d.index else np.nan
-
-    d1_hcc = (("HULC", 1, "up"), ("LINC00261", -1, "down"))       # gene, sign of the expected change
-    rows = []
-    for gene, sign, word in d1_hcc:
-        rows.append(_row(gene, "D1_HCC", f"log2FC {g(gene, 'log2FC_paired'):.2f}, FDR {g(gene, 'fdr_paired'):.2g}",
-                         f"{word} in tumour, FDR < 0.05",
-                         sign * g(gene, "log2FC_paired") > 0 and g(gene, "fdr_paired") < 0.05))
-    for gene, sign, word in d1_hcc:
-        rows.append(_row(gene, "D1_HCC replication",
-                         f"r {g(gene, 'hcc_rep_r'):.2f}, FDR {g(gene, 'hcc_rep_fdr'):.2g}, "
-                         f"{g(gene, 'hcc_rep_pairs'):.0f} pairs",
-                         f"{word} in tumour in the independent cohorts, FDR < 0.05",
-                         sign * g(gene, "hcc_rep_r") > 0 and g(gene, "hcc_rep_fdr") < 0.05))
-    rows.append(_row("COL1A1", "D1_chronic",
-                     f"rho_fibrosis {g('COL1A1', 'hoang_r'):.2f}, p {g('COL1A1', 'hoang_p'):.2g}, "
-                     f"D1_chronic {g('COL1A1', 'stat_D1_chronic'):.2f}",
-                     "positive association with fibrosis stage (rho > 0, p < 0.05)",
-                     g("COL1A1", "hoang_r") > 0 and g("COL1A1", "hoang_p") < 0.05))
-    for gene in ("BIRC5", "CYTOR"):
-        rows.append(_row(gene, "D2", f"HR_OS {g(gene, 'HR_OS'):.2f}, FDR {g(gene, 'fdr_OS'):.2g}", "HR > 1",
-                         g(gene, "HR_OS") > 1))
-    rows += [
-        _row("PVT1", "D3", f"rho_CN {g('PVT1', 'cn_rho'):.2f}, FDR {g('PVT1', 'cn_fdr'):.2g}, gain "
-                           f"{g('PVT1', 'cn_gain_freq'):.2f}, D3 {g('PVT1', 'stat_D3'):.2f}",
-             "rho_CN > 0 (FDR < 0.05), D3 > 0",
-             g("PVT1", "cn_rho") > 0 and g("PVT1", "cn_fdr") < 0.05 and g("PVT1", "stat_D3") > 0),
-    ]
-    for gene in ("PNPLA3", "TM6SF2"):
-        rows.append(_row(gene, "D4", f"max -log10 p {g(gene, 'stat_D4'):.0f} ({g(gene, 'gwas_top_snp')})",
-                         "liver-trait GWAS association", g(gene, "stat_D4") >= -np.log10(5e-8)))
-    rows += [
-        _row("HULC", "D5", f"percentile {g('HULC', 'pct_D5'):.2f}", "high", g("HULC", "pct_D5") >= 0.9),
-        _row("LINC01090", "D5", f"liver papers {g('LINC01090', 'n_liver'):.0f}",
-             "no LINC01089 papers credited", g("LINC01090", "n_liver") <= 1),
-        _row("HNF1A-AS1", "D6", f"D6 {g('HNF1A-AS1', 'comp_D6'):.2f}", "liver-specific (D6 >= 0.75)",
-             g("HNF1A-AS1", "comp_D6") >= 0.75),
-    ]
-    score_controls = {"disease_score": ("HULC", "H19"), "disease_score_fitted": ("HULC", "H19"),
-                      "hcc_score": ("HULC", "H19"), "chronic_score": ("COL1A1", "PNPLA3", "TM6SF2")}
-    for col, genes in score_controls.items():
-        if col not in d:
-            continue
-        bg90 = d.loc[~d["is_control"], col].quantile(0.9)
-        for gene in genes:
-            rows.append(_row(gene, col, f"{g(gene, col):.3f} (90th pct {bg90:.3f})",
-                             "> 90th percentile of the background", g(gene, col) > bg90))
-    rows.append(_row("GPC3", "actionability", f"tumour specificity {g('GPC3', 'tumour_specificity'):.2f}",
-                     "tumour-specific (> 0)", g("GPC3", "tumour_specificity") > 0))
-    if hla_control is not None and len(hla_control):
-        h = hla_control.iloc[0]
-        rows.append(_row("GPC3", "actionability", f"{h['peptide']} {h['allele']}: {h['affinity']:.0f} nM, presentation "
-                                                  f"pct {h['presentation_percentile']:.2f}",
-                         "predicted binder (presentation percentile <= 2)", h["presentation_percentile"] <= 2))
-
-    # mechanism controls: the expected class is the top class by standardized score (M2: a high class score)
-    expected = {"M1": ["MTLN", "SPAAR"], "M2": ["GAS5", "ZFAS1"], "M3": ["HNF1A-AS1", "LINC00261"],
-                "M4": ["MALAT1", "NEAT1"], "M5": ["NORAD"], "M6": ["SNHG1", "MIR22HG"]}
     classes = [f"M{i}" for i in range(1, 7)]
-    for cls, genes in expected.items():
-        expectation = "high (>= 0.6)" if cls == "M2" else "top class"
-        for gene in genes:
-            if gene not in mech_by_locus_name.index:
-                rows.append(_row(gene, cls, "not a lincorfz locus", "high" if cls == "M2" else "top class", None))
-                continue
-            sc = mech_by_locus_name.loc[gene, [f"{c}_score" for c in classes]].astype(float)
-            z = mech_by_locus_name.loc[gene, [f"{c}_z" for c in classes]].astype(float)
-            top = classes[int(np.nanargmax(z.to_numpy()))]
-            val = f"{cls} {sc[f'{cls}_score']:.2f} (z {z[f'{cls}_z']:.2f}); top {top}"
-            ok = sc[f"{cls}_score"] >= 0.6 if cls == "M2" else top == cls
-            rows.append(_row(gene, cls, val, expectation, ok))
+
+    def values(check):
+        """The check's source row as a dict, or a reason why there is none."""
+        if check.source == "disease":
+            key = f"ctrl:{check.gene}"
+            return d.loc[key].to_dict() if key in d.index else "not quantified"
+        if check.source == "mechanism":
+            if check.gene not in mech_by_locus_name.index:
+                return "not a lincorfz locus"
+            row = mech_by_locus_name.loc[check.gene].to_dict()
+            z = [float(row[f"{c}_z"]) for c in classes]
+            row["top_class"] = classes[int(np.nanargmax(z))] if not np.all(np.isnan(z)) else np.nan
+            return row
+        return hla_control.iloc[0].to_dict() if hla_control is not None and len(hla_control) else "not run"
+
+    rows = []
+    for check in controls.PANEL:
+        row = values(check)
+        conds, texts = [], []
+        for col, op, threshold in check.conditions:
+            text = f"{col} {op} {_format(threshold)}"
+            if threshold == controls.BACKGROUND_90:
+                threshold = d.loc[~d["is_control"], col].quantile(0.9) if col in d else np.nan
+                text = f"{col} {op} {_format(threshold)}, the {controls.BACKGROUND_90}"
+            conds.append((col, op, threshold))
+            texts.append(text)
+        expectation = f"{check.expectation} ({'; '.join(texts)})"
+        if isinstance(row, str):
+            rows.append({"control": check.gene, "score": check.score, "value": row, "expectation": expectation,
+                         "pass": np.nan})
+            continue
+        cols = list(dict.fromkeys([c for c, _, _ in conds] + list(check.show)))
+        value = ", ".join(f"{c} {_format(row.get(c, np.nan))}" for c in cols)
+        if any(_missing(row.get(c)) or _missing(t) for c, _, t in conds):
+            passed = np.nan
+        else:
+            passed = all(OPERATORS[op](row[c], t) for c, op, t in conds)
+        rows.append({"control": check.gene, "score": check.score, "value": value, "expectation": expectation,
+                     "pass": passed})
     return pd.DataFrame(rows)

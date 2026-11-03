@@ -6,6 +6,9 @@ Background = all lincRNA loci of the lincorfz run; control genes ('ctrl:<gene>')
 are not part of it. Signed components (D1, D2, D3) are ranked on magnitude, so a locus strongly down in disease
 scores as high as one strongly up; their signs give the direction (> 0: up in tumour / with disease, worse
 survival, expression following a copy gain), summarized in disease_direction, hcc_direction and chronic_direction.
+D1 HCC, D1 chronic and D2 are first centred on their background median (CENTRED): most loci are somewhat higher
+in tumours than in their adjacent normals, somewhat lower in chronic disease and somewhat higher with worse
+survival, and a locus that only follows such a shift is not specifically disease-associated. The stat_ columns keep the uncentred statistics.
 """
 import numpy as np
 import pandas as pd
@@ -15,6 +18,9 @@ from . import scoring
 DISEASE_WEIGHTS = {"D1": 0.25, "D2": 0.25, "D3": 0.20, "D4": 0.10, "D5": 0.10, "D6": 0.10}
 D1_WEIGHTS = {"D1_HCC": 0.7, "D1_chronic": 0.3}
 SIGNED = ("D1_HCC", "D1_chronic", "D2", "D3")
+CENTRED = ("D1_HCC", "D1_chronic", "D2")
+# a component gives a direction only if it is in the top quarter of the background (an upper quartile, a round
+# conventional cut-off for "clearly above a typical locus")
 DIRECTION_MIN_PERCENTILE = 0.75
 # the two scores reported next to disease_score (fixed in advance like the default weights); D6 (liver context)
 # is shared, D4/D5 are split by trait class / paper topic
@@ -52,7 +58,9 @@ def disease_score(stats, is_background, weights=DISEASE_WEIGHTS, d1_weights=D1_W
     `stats`: features x statistics (D1_HCC, D1_chronic, D2, D3, D4, D5, their hcc / chronic parts and the D6
     parts). Returns the percentiles (pct_), the components (comp_, with the sub-composites D1 and D6),
     disease_score / _coverage / _score_noD5, hcc_score / _coverage, chronic_score / _coverage and the directions.
+    The CENTRED statistics are ranked, and give their direction, after subtracting their background median.
     """
+    stats = scoring.centred(stats, stats[is_background], [c for c in CENTRED if c in stats])
     bg = stats[is_background]
     cols = list(stats.columns)
     pct = scoring.component_percentiles(stats, bg, cols, signed=[c for c in SIGNED if c in cols])

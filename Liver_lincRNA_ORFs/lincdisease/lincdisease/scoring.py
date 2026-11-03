@@ -20,7 +20,9 @@ NEUTRAL = 0.5
 
 def percentile_vs_background(values, background, weights=None):
     """Mid-rank empirical percentile of each value among the non-missing background values (NaN stays NaN).
-    `weights` (aligned with `background`): weight of each background value (default 1)."""
+    `weights` (aligned with `background`): weight of each background value (default 1).
+    Equivalent to (weight of background values < x + half the weight of those == x) / total weight, computed
+    from the cumulative weights of the sorted background."""
     bg = pd.Series(background, dtype=float).reset_index(drop=True)
     w = (pd.Series(1.0, index=bg.index) if weights is None
          else pd.Series(np.asarray(weights, dtype=float), index=bg.index))
@@ -37,6 +39,14 @@ def percentile_vs_background(values, background, weights=None):
     below = cw[np.searchsorted(bg, x[ok], side="left")]
     upto = cw[np.searchsorted(bg, x[ok], side="right")]
     out[ok] = (below + 0.5 * (upto - below)) / cw[-1]
+    return out
+
+
+def centred(table, background, columns):
+    """`columns` of `table` minus their median over `background` (same columns; missing values ignored)."""
+    out = table.copy()
+    for col in columns:
+        out[col] = table[col] - background[col].median()
     return out
 
 

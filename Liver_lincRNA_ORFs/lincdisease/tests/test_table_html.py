@@ -8,7 +8,8 @@ from lincdisease import table_html
 
 def _tables():
     orfs = pd.DataFrame({"orf_id": ["a", "b", "c"], "locus_id": ["L1", "L1", "L2"], "locus_name": ["X", "X", "Y"],
-                         "is_candidate": [True, False, False], "hcc_score": [0.6, 0.9, np.nan],
+                         "is_candidate": [True, False, False], "disease_score_noD5": [0.6, 0.9, np.nan],
+                         "hcc_score": [0.6, 0.9, np.nan],
                          "chronic_score": [0.5, 0.4, 0.7], "pct_m1_orf_share": [0.1, 0.2, 0.3]})
     support = pd.DataFrame({"orf_id": ["a", "b", "c"], "crispr_screen_value": [np.nan, 2.0, 0.0]})
     mech = pd.DataFrame({"orf_id": ["a", "b", "c"], "pct_m1_orf_share": [0.1, 0.2, 0.3], "pct_m2_nmd": [1, 0, 0.5]})
@@ -20,7 +21,7 @@ def _tables():
 
 def test_rows_union_and_sets():
     t = table_html.rows(*_tables())
-    assert list(t["orf_id"]) == ["b", "a"]           # candidates + screen value >= 1, by HCC score
+    assert list(t["orf_id"]) == ["b", "a"]           # candidates + screen value >= 1, by disease score w/o D5
     assert t.set_index("orf_id")["set"].to_dict() == {"a": "candidate", "b": "screen"}
     assert t.set_index("orf_id").loc["b", "stat_D3"] == 0.2 and "pct_m2_nmd" in t
 

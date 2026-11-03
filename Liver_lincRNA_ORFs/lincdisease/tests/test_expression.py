@@ -56,3 +56,14 @@ def test_size_factors_undo_composition():
     sf = expression.size_factors(genes)
     assert sf.iloc[10:].mean() / sf.iloc[:10].mean() == pytest.approx(2.0, rel=1e-6)
     assert np.exp(np.log(sf).mean()) == pytest.approx(1.0)
+
+
+def test_read_sums_raises_on_samples_missing_from_added_features(tmp_path):
+    r = _regions()
+    _write_sums(tmp_path / "sums", r[r["feature_id"] == "a"], ["a"])
+    d = tmp_path / "sums_b"
+    d.mkdir()
+    r[r["feature_id"] == "b"].to_csv(d / "regions.tsv", sep="\t", index=False)
+    pd.DataFrame({"sample_id": ["s1"], "b": [1.0]}).to_csv(d / "sums.0.tsv", sep="\t", index=False)   # no s2
+    with pytest.raises(ValueError, match="1 samples x 1 features"):
+        expression.read_sums(tmp_path, r)

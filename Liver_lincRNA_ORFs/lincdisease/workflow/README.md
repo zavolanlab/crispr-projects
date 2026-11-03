@@ -46,11 +46,14 @@ L/run.sh adopt homology.orfs.tsv   # accept an existing output as up to date (an
 ```
 
 From elsewhere, add `--root DIR` before the command. A step reruns by itself when one of its input tables
-changes, or when a lincdisease module it uses is edited: the module, the modules it imports, `__main__.py`,
-`inputs.py` and `resources.py` (`src()` in the Snakefile). Two kinds of steps run only once: the downloads
-(`fetch`; use `run.sh redo fetch` after adding a resource) and the recount3 streaming (`quant*`, which resumes
-where it stopped). An edit that only touches comments or logging still reruns the steps that use the module; if
-that is expensive (homology, peptide), `run.sh adopt <their outputs>` marks them up to date instead.
+changes, or when its code changes: the lincdisease modules it uses, the modules they import, `inputs.py`,
+`resources.py`, and its own part of `__main__.py` (its `cmd_<step>` with the helpers and constants it uses, and
+its command-line options). This is a fingerprint of the code without docstrings and comments (`code()` in the
+Snakefile, `codehash.py`), so editing docstrings, comments or another step's command does not rerun a step;
+editing logging calls does. Two kinds of steps run only once: the downloads (`fetch`; use `run.sh redo fetch`
+after adding a resource) and the recount3 streaming (`quant*`, which resumes where it stopped). After an edit that
+cannot change an expensive step's result (homology, peptide), `run.sh adopt <their outputs>` marks them up to
+date instead of rerunning them.
 
 Final outputs in the output directory: `lincdisease.table.html` (candidates and screen-supported ORFs, sortable,
 with an index of the scores), `lincdisease.candidates.tsv`, `lincdisease.orfs.tsv`,
@@ -80,8 +83,8 @@ Unit tests on synthetic data for the statistics, the scoring and the input check
 - The log of each step is `<out_dir>/logs/<step>.log`; the Slurm log is `<out_dir>/logs/slurm/<step>/<jobid>.log`.
 - "Directory cannot be locked": an earlier run was killed (e.g. the login session ended uncleanly). Check with
   `run.sh status` that nothing is running, then `run.sh unlock` and start again.
-- A Slurm job killed for memory is retried once with twice the memory. If it fails again, raise its `mem(...)`
-  value in `Snakefile`.
+- A failed Slurm job (out of memory or time) is retried once with twice the memory and time limit. If it fails
+  again, raise its `mem(...)` or `minutes(...)` value in `Snakefile`.
 - A failed step does not stop independent steps (`keep-going`); after fixing the cause, `run.sh start` resumes
   and reruns only what is missing or failed.
 
