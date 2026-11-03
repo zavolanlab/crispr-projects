@@ -158,7 +158,8 @@ C.push(p("Samples: TCGA-LIHC (424 samples: 371 primary tumours, one per patient,
   "biopsies with fibrosis stage 0-4 and NAFLD activity score), Suppli et al. 2019 (GSE126848, 57: normal-weight, " +
   "obese, NAFL, NASH) and Boldanova et al. 2017 (GSE84346, 28 untreated biopsies, HCV-infected vs non-HCV), " +
   "with phenotypes from the recount3 SRA sample attributes. A fourth cohort, Govaere et al. 2020 (GSE135251, " +
-  "206 NAFLD biopsies with fibrosis stage and NAFLD activity score, 10 controls), is not in recount3: its reads " +
+  "206 NAFLD biopsies with fibrosis stage and NAFLD activity score, 10 controls; 215 used, as the read 2 file of " +
+  "one NASH F2 run is corrupt at ENA), is not in recount3: its reads " +
   "were aligned with STAR 2.7.11b to GRCh38 / GENCODE v42, the loci counted in the alignments over the same " +
   "regions (samtools bedcov), and gene counts (reverse-stranded library) and technical covariates taken from " +
   "STAR; phenotypes come from the GEO sample characteristics. Loci flagged `tcga_quantifiable = False` are not " +
