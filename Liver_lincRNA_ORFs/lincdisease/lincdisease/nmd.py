@@ -6,7 +6,7 @@ TCGA/GTEx (same regions, `ncov`).
 Samples: 6 scrambled-shRNA controls; NMD inhibited = UPF1 knock-down (3) and SMG6 + SMG7 double knock-down (3), the
 two conditions in which NMD targets rise most. Single SMG6 / SMG7 knock-downs and the rescues are not used.
 
-ncov is divided by median-of-ratios size factors of the recount3 gene sums (chronic.size_factors). Per feature,
+ncov is divided by median-of-ratios size factors of the recount3 gene sums (expression.size_factors). Per feature,
 nmd_log2fc = mean log2(scaled ncov + pseudocount) of the NMD-inhibited samples minus that of the controls
 (> 0 = up when NMD is inhibited), as the mean of the two conditions' log2 fold changes. Test: one-way linear model
 with the three conditions (control, UPF1 knock-down, SMG6 + SMG7 knock-down), t test of the contrast
@@ -19,7 +19,8 @@ import pandas as pd
 from scipy import stats
 
 from . import quant
-from .chronic import parse_attributes, size_factors
+from .chronic import parse_attributes
+from .expression import size_factors
 from .disease import bh
 
 PROJECT = "SRP083135"
@@ -42,7 +43,8 @@ def sensitivity(ncov, samples, genes, pseudocount=0.05, min_detected=MIN_DETECTE
     """
     ncov: features x samples (quant.normalize); samples: manifest rows with sample_id and condition; genes: AUC-scaled
     recount3 gene sums of protein-coding genes (genes x samples). Returns per feature nmd_log2fc, the two
-    conditions' log2 fold changes, Welch p and BH-FDR.
+    conditions' log2 fold changes, the p of the contrast t test (residual variance pooled over the three
+    conditions) and BH-FDR.
     """
     cond = samples.set_index("sample_id")["condition"].reindex(ncov.columns)
     sf = size_factors(genes[ncov.columns])

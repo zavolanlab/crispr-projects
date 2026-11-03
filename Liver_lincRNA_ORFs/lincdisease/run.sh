@@ -10,7 +10,8 @@
 #   stop                stop the workflow and cancel its Slurm jobs
 #   redo STEP...        rerun these steps and everything downstream of them
 #   unlock              after a crash or a killed login session ("Directory cannot be locked")
-#   adopt               once: accept outputs made before the workflow existed as up to date
+#   adopt [TARGET...]   accept existing outputs as up to date without running them (default: all), e.g. after an
+#                       edit that cannot change them (comments, logging); say why in the commit message
 #
 # The paths of config/config.yaml are relative to the root directory: --root DIR, else the current directory.
 # Targets: all (annotation tables and HTML table), govaere (Govaere 2020 CRAMs), or any output file / rule name.
@@ -35,7 +36,7 @@ SMK=(snakemake --config "root=$ROOT" --snakefile "$HERE/workflow/Snakefile" --pr
      --cluster-generic-status-cmd "$HERE/workflow/scripts/slurm_status.sh")
 smk() { "${SMK[@]}" "$@"; }
 # the pid file may outlive the login session and its pid be reused: check that the process is Snakemake
-running() { [ -s "$PIDFILE" ] && tr '\0' ' ' < "/proc/$(cat "$PIDFILE")/cmdline" 2>/dev/null | grep -q snakemake; }
+running() { [ -s "$PIDFILE" ] && { tr '\0' ' ' < "/proc/$(cat "$PIDFILE")/cmdline"; } 2>/dev/null | grep -q snakemake; }
 start() {
   if running; then echo "already running (pid $(cat "$PIDFILE")); see run.sh status"; exit 1; fi
   log=$LOGS/$(date +%Y%m%d_%H%M%S).log
@@ -75,6 +76,6 @@ case "$cmd" in
     if running; then kill -INT -- "-$(cat "$PIDFILE")"; echo "stopping; Snakemake cancels its Slurm jobs"; else echo "not running"; fi
     ;;
   unlock) smk --unlock ;;
-  adopt) smk --touch all ;;
-  *) sed -n 2,17p "$0"; exit 1 ;;
+  adopt) smk --touch "${@:-all}" ;;
+  *) sed -n 2,18p "$0"; exit 1 ;;
 esac

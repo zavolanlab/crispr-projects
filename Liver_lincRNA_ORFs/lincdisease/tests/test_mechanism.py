@@ -47,6 +47,7 @@ def test_class_table_phylocsf_weighting():
     feats = pd.DataFrame({c: [0.0, 1.0] for cols in mechanism.CLASSES.values() for c in cols})
     feats["m1_phylocsf"] = [0.0, 10.0]
     feats["copy_attribution"] = [1.0, 0.0]
+    feats["orf_length"] = [20.0, 20.0]
     res = mechanism.class_table(feats.drop(columns=["m1_phylocsf_weighted"]), pd.Series([True, True]),
                                 ["L1", "L2"])
     assert res.loc[1, "pct_m1_phylocsf_weighted"] == pytest.approx(0.5)   # no attribution -> neutral
@@ -77,3 +78,17 @@ def test_nearest_coding_and_coexpression():
     loc = pd.DataFrame([g.loc["g1"] + rng.normal(0, 0.1, 50)], index=["L1"])
     res = mechanism.coexpression(loc, g, nb.loc[["L1"]], null)
     assert res.loc["L1", "coexpr_rho"] > 0.9 and res.loc["L1", "neighbour"] == "g1"
+
+
+def test_length_dependent_features_ranked_within_length_bins():
+    from scipy import stats
+    rng = np.random.default_rng(0)
+    n = 500
+    length = rng.integers(10, 300, n).astype(float)
+    feats = pd.DataFrame({"orf_length": length, "copy_attribution": 1.0,
+                          "m1_orf_share": length + rng.normal(0, 1, n),     # length-driven
+                          "m1_peptides": length})                         # not in LENGTH_DEPENDENT
+    res = mechanism.class_table(feats, pd.Series(True, index=feats.index), [f"L{i}" for i in range(n)])
+    assert stats.spearmanr(res["pct_m1_orf_share"], length)[0] < 0.5
+    assert stats.spearmanr(res["pct_m1_peptides"], length)[0] > 0.99
+    assert res["length_bin"].nunique() == mechanism.LENGTH_BINS

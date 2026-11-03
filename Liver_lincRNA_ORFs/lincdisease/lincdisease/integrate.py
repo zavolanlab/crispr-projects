@@ -3,7 +3,9 @@ Locus-level disease score (LOGIC.md, Step 3): component statistics -> percentile
 loci -> weighted composite shrunk toward 0.5 for missing components.
 
 Background = all lincRNA loci of the lincorfz run; control genes ('ctrl:<gene>') are scored against it but
-are not part of it. Signed components (D1, D2, D3) are ranked on magnitude; their signs give the direction.
+are not part of it. Signed components (D1, D2, D3) are ranked on magnitude, so a locus strongly down in disease
+scores as high as one strongly up; their signs give the direction (> 0: up in tumour / with disease, worse
+survival, expression following a copy gain), summarized in disease_direction, hcc_direction and chronic_direction.
 """
 import numpy as np
 import pandas as pd
@@ -48,7 +50,7 @@ def disease_score(stats, is_background, weights=DISEASE_WEIGHTS, d1_weights=D1_W
     signs, the sub-composites D1 and D6, disease_score, disease_coverage, disease_score_noD5 and direction.
     """
     bg = stats[is_background]
-    cols = [c for c in stats.columns]
+    cols = list(stats.columns)
     pct = scoring.component_percentiles(stats, bg, cols, signed=[c for c in SIGNED if c in cols])
     sign_cols = [c for c in pct.columns if c.endswith("_sign")]
     signs = pct[sign_cols].rename(columns=lambda c: c[:-5])
@@ -75,6 +77,9 @@ def disease_score(stats, is_background, weights=DISEASE_WEIGHTS, d1_weights=D1_W
         have[c] = cv
 
     def coverage(w):
+        """Fraction of the weight with data, where D1 and D6 count with the coverage of their sub-composites (a
+        locus with D1 HCC but not D1 chronic has D1 coverage 0.7); scoring.composite's own coverage would count
+        them as fully present."""
         w = pd.Series(w, dtype=float)
         return (have.reindex(columns=w.index).fillna(0) * w).sum(axis=1) / w.sum()
 
@@ -96,5 +101,4 @@ def disease_score(stats, is_background, weights=DISEASE_WEIGHTS, d1_weights=D1_W
     if "D1_chronic" in signs:
         out["chronic_direction"] = scoring.consensus_direction(pct[["D1_chronic"]], signs[["D1_chronic"]],
                                                                DIRECTION_MIN_PERCENTILE, labels=("up", "down"))
-    # D3 sign is set so that > 0 means oncogene-like (CN gain / loss of methylation silencing raise expression)
     return out

@@ -11,6 +11,10 @@ The analysis consists of
   files, prints the `sbatch` commands and inspects/visualizes the results,
 * **`sbatch/run_lincorfz.sbatch`**: the SLURM job that runs the Nextflow driver.
 
+The disease relevance and mechanism classes of the ORFs found by lincorfz are annotated by **`lincdisease/`**
+(Python package and Snakemake workflow; specification `lincdisease/LOGIC.md`, usage
+`lincdisease/workflow/README.md`) and shown in **`Liver_lincRNA_ORFs_disease.ipynb`**.
+
 All results are written to `${WF_RUNS_DIR}Liver_lincRNA_ORFs_Claude/`. Cluster paths are never written in this
 repository: they come from the `.env` file in the repository root (`Liver_projects.scicore.env`, not tracked by git;
 see below). The shell commands below load it first, from within `Liver_lincRNA_ORFs/`:

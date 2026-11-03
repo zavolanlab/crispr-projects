@@ -1,0 +1,22 @@
+# Tool environment of the `peptide` step (--tool-env): hmmsearch (Pfam), metapredict (disorder) and MHCflurry
+# (HLA-I presentation), which conflict with the main environment. Versions of the v2 results; exact builds in
+# lincdisease_peptide.lock.txt (conda) and lincdisease_peptide.pip.txt (pip). The MHCflurry models are fetched
+# once into <data_dir>/mhcflurry, where the peptide step looks for them (login node):
+#   MHCFLURRY_DATA_DIR=<data_dir>/mhcflurry <env>/bin/mhcflurry-downloads fetch models_class1_presentation
+name: lincdisease_peptide
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=3.10
+  - pip
+  - pandas
+  - numpy
+  - scipy
+  - pytest
+  - hmmer=3.4
+  - pip:
+      - mhcflurry==2.3.16
+      - metapredict==3.1.1
+      - torch==2.14.1

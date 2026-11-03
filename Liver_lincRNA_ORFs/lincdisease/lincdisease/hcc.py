@@ -10,11 +10,13 @@ Cohorts (patient and tissue from the recount3 SRA metadata):
   GSE94660  SRP099053: 21 HBV-HCC patients, tumour and non-neoplastic liver
   GSE56545  SRP040998: HCC patients after liver transplantation, tumour and adjacent normal (single-end)
 
-ncov of the runs of one sample are averaged. Per cohort and feature: matched-pairs rank-biserial correlation r of
+ncov is divided by median-of-ratios size factors of the recount3 gene sums, per cohort (expression.py: tumours lose
+the hepatocyte transcripts that dominate liver RNA), and the runs of one sample are averaged. Per cohort and feature: matched-pairs rank-biserial correlation r of
 log2(ncov + pseudocount), tumour minus normal of the same patient, and Wilcoxon signed-rank p (as D1 HCC paired);
 features detected (ncov > 0) in < MIN_DETECTED of the cohort's samples are not tested there. Combined over cohorts:
 hcc_rep_r = mean r weighted by the number of pairs, Stouffer z (signed z from the two-sided p, weights sqrt(pairs)),
-p and BH-FDR over features.
+p and BH-FDR over features. `hcc_replicated` (replicated): same sign as D1 HCC and combined FDR < 0.05; missing where
+no cohort tested the feature.
 """
 import re
 
@@ -22,7 +24,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from . import quant
+from . import expression, quant
 from .chronic import parse_attributes
 from .disease import bh, paired_rank_biserial
 
@@ -66,9 +68,23 @@ def manifest():
     return man[man["patient"].map(both)].reset_index(drop=True)
 
 
+def size_factors(genes, samples):
+    """Size factors of the runs (expression.size_factors), per cohort; `genes`: protein-coding gene sums x runs."""
+    s = samples.set_index("sample_id")
+    return pd.concat([expression.size_factors(genes[genes.columns.intersection(g.index)])
+                      for _, g in s.groupby("cohort")])
+
+
+def replicated(rep, d1_hcc):
+    """True / False per feature of `rep` (replication()): same sign as D1 HCC and combined FDR < 0.05; missing where
+    no replication cohort tested the feature."""
+    same = np.sign(rep["hcc_rep_r"]) == np.sign(d1_hcc.reindex(rep.index))
+    return (same & (rep["hcc_rep_fdr"] < 0.05)).astype(object).where(rep["hcc_rep_fdr"].notna())
+
+
 def replication(ncov, samples, pseudocount=0.05, min_detected=MIN_DETECTED):
     """
-    ncov: features x runs (quant.normalize); samples: manifest rows (sample_id, cohort, experiment_acc, patient,
+    ncov: features x runs (quant.normalize, scaled by size_factors); samples: manifest rows (sample_id, cohort, experiment_acc, patient,
     tissue). Returns per feature <cohort>_r / _p / _pairs and the combined hcc_rep_r, hcc_rep_z, hcc_rep_p,
     hcc_rep_fdr, hcc_rep_n_cohorts, hcc_rep_pairs.
     """

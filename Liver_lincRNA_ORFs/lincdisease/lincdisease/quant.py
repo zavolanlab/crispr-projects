@@ -217,9 +217,22 @@ def _download(url, dest):
 
 
 def run(samples, regions, out_dir, worker="0", scratch=None):
-    """Stream the bigWigs of `samples` (manifest rows); append one row of sums per sample, skip done ones."""
+    """
+    Stream the bigWigs of `samples` (manifest rows); append one row of sums per sample, skip done ones. The regions
+    are kept in out_dir/regions.tsv; a later run on changed regions raises (expression.read_sums checks the same).
+    Samples that fail (download, bigWig) are reported and the run exits non-zero after the others, so that a rerun
+    retries them.
+    """
     import pyBigWig
+    from .expression import REGION_COLUMNS, changed_features
     os.makedirs(out_dir, exist_ok=True)
+    saved = os.path.join(out_dir, "regions.tsv")
+    if os.path.exists(saved):
+        changed = changed_features(pd.read_csv(saved, sep="\t"), regions)
+        if changed:
+            raise ValueError(f"{out_dir}: regions of {len(changed)} features differ from those of the existing sums")
+    else:
+        regions[REGION_COLUMNS].to_csv(saved, sep="\t", index=False)
     features = sorted(regions["feature_id"].unique())
     path = os.path.join(out_dir, f"sums.{worker}.tsv")
     done = set()
@@ -229,6 +242,7 @@ def run(samples, regions, out_dir, worker="0", scratch=None):
         with open(path, "w") as fh:
             fh.write("\t".join(["sample_id"] + features) + "\n")
     tmpdir = tempfile.mkdtemp(dir=scratch)
+    failed = []
     try:
         for row in samples.itertuples(index=False):
             if row.sample_id in done:
@@ -241,6 +255,7 @@ def run(samples, regions, out_dir, worker="0", scratch=None):
                 bw.close()
             except Exception as exc:          # one bad sample must not stop the stream
                 print(f"failed {row.sample_id}: {exc}", flush=True)
+                failed.append(row.sample_id)
                 continue
             finally:
                 if os.path.exists(local):
@@ -249,6 +264,8 @@ def run(samples, regions, out_dir, worker="0", scratch=None):
                 fh.write("\t".join([row.sample_id] + [f"{v:.6g}" for v in sums]) + "\n")
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+    if failed:
+        raise SystemExit(f"{len(failed)} samples failed ({', '.join(failed[:5])}); rerun to retry them")
     return path
 
 

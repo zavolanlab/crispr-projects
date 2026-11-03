@@ -1,8 +1,11 @@
 """
 Public resources used by lincdisease: URLs, cached download and readers. Files are downloaded once into the
-data directory (--data-dir; never into the repository) and re-used.
+data directory (--data-dir; never into the repository) and re-used. Every download is recorded in
+<directory>/downloads.tsv (date, file, URL, size, md5), as some URLs (GWAS Catalog `latest`) change over time.
 """
+import datetime
 import gzip
+import hashlib
 import os
 import shutil
 import urllib.request
@@ -24,10 +27,8 @@ URLS = {
                     "gwas-catalog-associations_ontology-annotated-full.zip",
     # TCGA Pan-Cancer Clinical Data Resource (Liu et al. 2018), survival endpoints
     "tcga_cdr": "https://api.gdc.cancer.gov/data/1b5f413e-a8d1-4d10-92eb-7c4ae739ed81",
-    # TCGA-LIHC masked copy-number segments and 450K methylation (GDC, GRCh38) via the UCSC Xena GDC hub
+    # TCGA-LIHC masked copy-number segments (GDC, GRCh38) via the UCSC Xena GDC hub
     "tcga_lihc_cn": XENA_GDC + "TCGA-LIHC.masked_cnv_DNAcopy.tsv.gz",
-    "tcga_lihc_methylation": XENA_GDC + "TCGA-LIHC.methylation450.tsv.gz",
-    "hm450_probemap": XENA_GDC + "HM450.hg38.manifest.gencode.v36.probeMap",
     # TCGA PanCanAtlas ABSOLUTE purity / ploidy (Taylor et al. 2018)
     "tcga_purity": "https://api.gdc.cancer.gov/data/4f277128-f793-4354-a13d-30cc7fe9f6b5",
     # all GTEx samples of recount3 with their tissue (project)
@@ -91,7 +92,22 @@ def fetch(key, data_dir, url=None):
         with urllib.request.urlopen(url, timeout=300) as r, open(tmp, "wb") as fh:
             shutil.copyfileobj(r, fh)
         os.replace(tmp, path)
+        _record(path, url)
     return path
+
+
+def _record(path, url):
+    md5 = hashlib.md5()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 22), b""):
+            md5.update(block)
+    log = os.path.join(os.path.dirname(path), "downloads.tsv")
+    new = not os.path.exists(log)
+    with open(log, "a") as fh:
+        if new:
+            fh.write("date\tfile\turl\tbytes\tmd5\n")
+        fh.write(f"{datetime.date.today()}\t{os.path.basename(path)}\t{url}\t{os.path.getsize(path)}\t"
+                 f"{md5.hexdigest()}\n")
 
 
 def read_segdups(data_dir):

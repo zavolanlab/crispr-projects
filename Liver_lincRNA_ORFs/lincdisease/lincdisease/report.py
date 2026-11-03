@@ -4,9 +4,9 @@ Final tables (LOGIC.md, "Outputs") and the control panel check (Step 5).
 Per ORF: QC flags and tier, copy-attribution confidence, the locus' disease components and score, the
 actionability score, mechanism class scores, standardized class scores and dominant class.
 Actionability (per ORF) = equal-weight composite of the percentiles (among all ORFs, each weighted by 1 / number
-of ORFs of its locus) of the locus' tumour
-specificity, the number of lincORF-specific HLA-I peptides and predicted HLA-I binding (missing until MHCflurry
-presentation (MHCflurry, distinct binder peptides over the HepG2, Huh7 and common alleles).
+of ORFs of its locus) of three parts: the locus' tumour specificity, the number of lincORF-specific HLA-I
+immunopeptides, and the predicted HLA-I presentation (MHCflurry; distinct binder peptides over the HepG2, Huh7 and
+common alleles; missing where the peptide step has not been run).
 """
 import numpy as np
 import pandas as pd
@@ -111,10 +111,6 @@ def control_report(disease_loci, mech_by_locus_name, hla_control=None):
              "rho_CN > 0 (FDR < 0.05), D3 > 0",
              g("PVT1", "cn_rho") > 0 and g("PVT1", "cn_fdr") < 0.05 and g("PVT1", "stat_D3") > 0),
     ]
-    for gene, note in (("MEG3", ""), ("GSTP1", "; chosen post hoc")):
-        rows.append(_row(gene, "D3", f"rho_meth {g(gene, 'meth_rho'):.2f} (raw {g(gene, 'meth_rho_raw'):.2f}), "
-                                     f"FDR {g(gene, 'meth_fdr'):.2g}",
-                         f"rho_meth < 0 (FDR < 0.05){note}", g(gene, "meth_rho") < 0 and g(gene, "meth_fdr") < 0.05))
     for gene in ("PNPLA3", "TM6SF2"):
         rows.append(_row(gene, "D4", f"max -log10 p {g(gene, 'stat_D4'):.0f} ({g(gene, 'gwas_top_snp')})",
                          "liver-trait GWAS association", g(gene, "stat_D4") >= -np.log10(5e-8)))

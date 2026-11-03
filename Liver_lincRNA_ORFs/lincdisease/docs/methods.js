@@ -136,7 +136,7 @@ C.push(h2("2.3 Directions"));
 C.push(p("A direction is read from the signs of the **informative** signed components, those with percentile " +
   "≥ 0.75: all positive → up (oncogene-like), all negative → down (suppressor-like), both → inconsistent, " +
   "none informative → none. Signs are defined so that > 0 means higher expression with disease (D1), worse " +
-  "survival with higher expression (D2), or expression raised by copy gain or loss of promoter methylation (D3)."));
+  "survival with higher expression (D2), or expression that follows a frequent copy gain (D3)."));
 
 C.push(h2("2.4 Multiple testing"));
 C.push(p("p-values are adjusted by Benjamini-Hochberg over all tested features (loci and controls) of a test; " +
@@ -151,7 +151,17 @@ C.push(p("Many loci are de novo assemblies without a GENCODE gene, so gene-level
   "`tcga_quantifiable = False` and receive no expression-based component. For sample *j* with total base " +
   "coverage AUC_{j} (recount3 `bc_auc.all_reads_all_bases`):"));
 C.push(eq(Sub(R("ncov"), R("fj")), R(" = "), F(Sum([R("i ∈ "), Sub(R("Q"), R("f"))], null, Sub(R("cov"), R("ij"))), [R("|"), Sub(R("Q"), R("f")), R("| · "), Sub(R("AUC"), R("j"))]), R(" · "), Sup(R("10"), R("9")),
-  R(",    "), Sub(R("e"), R("fj")), R(" = "), Sub(R("log"), R("2")), Par([Sub(R("ncov"), R("fj")), R(" + 0.05")])));
+  R(",    "), Sub(R("e"), R("fj")), R(" = "), Sub(R("log"), R("2")), Par([F(Sub(R("ncov"), R("fj")), Sub(R("s"), R("j"))), R(" + 0.05")])));
+C.push(p("**Size factors.** Dividing by the total coverage alone would let the few hepatocyte transcripts that " +
+  "dominate liver RNA (ALB, APOA1, …) set the scale; their share falls in tumours and in injured liver, which " +
+  "lifts every other transcript. *ncov* is therefore divided by median-of-ratios size factors *s*_{j}, computed " +
+  "from the recount3 gene sums *y*_{gj} (AUC-scaled) of protein-coding genes detected in ≥ 90% of the samples, " +
+  "the 1% most abundant left out:"));
+C.push(eq(Sub(R("s"), R("j")), R(" = exp "), Sq([Sub(R("median"), R("g")), Par([R("ln "), Sub(R("y"), R("gj")), R(" − "),
+  F(R("1"), R("n")), Sum(R("j′"), null, [R("ln "), Sub(R("y"), R("gj′"))])])])));
+C.push(p("rescaled to geometric mean 1 over the samples that are compared with each other: TCGA-LIHC and all GTEx " +
+  "samples together (tumours, adjacent normals and the GTEx tissues are compared in D1, D6 and tumour " +
+  "specificity), and each HCC replication, chronic liver disease and NMD cohort on its own."));
 C.push(p("Samples: TCGA-LIHC (424 samples: 371 primary tumours, one per patient, and 50 adjacent normals with a " +
   "matched tumour), GTEx (550 samples: all 251 liver samples and 10 random samples of each of the other 30 " +
   "tissues), and three recount3 SRA chronic liver disease cohorts: Hoang et al. 2019 (GSE130970, 78 NAFLD " +
@@ -168,37 +178,31 @@ C.push(p("Samples: TCGA-LIHC (424 samples: 371 primary tumours, one per patient,
 // 4
 C.push(h1("4. Disease components D1-D6 (per locus)"));
 C.push(h2("D1 HCC: tumour versus normal expression"));
-C.push(p("Two rank-based effect sizes in [−1, 1] (> 0: higher in tumours). **Paired**: for the *n* = 50 patients " +
-  "with tumour and adjacent normal, the differences *d*_{i} = *e*_{tumour} − *e*_{normal} (zeros dropped) are " +
-  "ranked by |*d*_{i}|, and the matched-pairs rank-biserial correlation is"));
-C.push(eq(Sub(R("r"), R("paired")), R(" = "), F([Sub(R("R"), R("+")), R(" − "), Sub(R("R"), R("−"))], [Sub(R("R"), R("+")), R(" + "), Sub(R("R"), R("−"))])));
+C.push(p("A rank-based effect size in [−1, 1] (> 0: higher in tumours). For the *n* = 50 patients with tumour and " +
+  "adjacent normal, the differences *d*_{i} = *e*_{tumour} − *e*_{normal} (zeros dropped) are ranked by " +
+  "|*d*_{i}|, and the matched-pairs rank-biserial correlation is"));
+C.push(eq(Sub(R("D1"), R("HCC")), R(" = "), Sub(R("r"), R("paired")), R(" = "), F([Sub(R("R"), R("+")), R(" − "), Sub(R("R"), R("−"))], [Sub(R("R"), R("+")), R(" + "), Sub(R("R"), R("−"))])));
 C.push(p("with *R*_{+} and *R*_{−} the rank sums of positive and negative differences (Wilcoxon signed-rank p-value). " +
-  "**Unpaired**: the 371 tumours against the 251 GTEx livers, with the Mann-Whitney statistic *U* of tumours " +
-  "over normals,"));
+  "Rank statistics keep loci of very different expression levels, and the many zeros of lowly expressed " +
+  "lincRNAs, on one scale. **Tumours vs GTEx liver** (reported, not scored): the 371 tumours against the 251 " +
+  "GTEx livers, with the Mann-Whitney statistic *U* of tumours over normals,"));
 C.push(eq(Sub(R("r"), R("GTEx")), R(" = "), F(R("2U"), [Sub(R("n"), R("T")), Sub(R("n"), R("G"))]), R(" − 1,    AUC = "), F([Sub(R("r"), R("GTEx")), R(" + 1")], R("2"))));
-C.push(eq(Sub(R("D1"), R("HCC")), R(" = "), F([Sub(R("r"), R("paired")), R(" + "), Sub(R("r"), R("GTEx"))], R("2"))));
-C.push(p("The mean log2 fold changes and the BH-adjusted p-values of both tests are reported (`log2FC_paired`, " +
-  "`fdr_paired`, `auc_vs_gtex`, `fdr_vs_gtex`). Rank statistics keep loci of very different expression levels, " +
-  "and the many zeros of lowly expressed lincRNAs, on one scale."));
+C.push(p("It is not scored because it mixes two studies: the TCGA adjacent normals and the GTEx livers, both " +
+  "non-tumour liver, already differ with |*r*| > 0.3 for most loci, and only the paired design is free of this " +
+  "batch. The mean log2 fold changes and the BH-adjusted p-values of both tests are reported (`log2FC_paired`, " +
+  "`fdr_paired`, `auc_vs_gtex`, `fdr_vs_gtex`)."));
 C.push(p("**Replication** (reported, not scored). The matched-pairs statistic *r*_{paired} is computed in four " +
   "independent recount3 cohorts of HCC tumours and adjacent non-tumour liver of the same patients: GSE77314 " +
   "(49 pairs), GSE77509 (20 HBV-HCC with portal vein tumour thrombus; the runs of a sample averaged, thrombi not " +
-  "used), GSE94660 (21 HBV-HCC) and GSE56545 (14), quantified as in Section 3. A feature detected in < 20% of a " +
+  "used), GSE94660 (21 HBV-HCC) and GSE56545 (14), quantified as in Section 3 with size factors per cohort. A feature detected in < 20% of a " +
   "cohort's samples is not tested there. Over the cohorts *c* with a statistic and *m*_{c} pairs, the combined " +
   "*r* is the pair-weighted mean Σ *m*_{c} *r*_{c} / Σ *m*_{c} and the combined p-value is Stouffer's (signed " +
   "*z* from the two-sided p, weights √*m*_{c}, as for D1 chronic below), BH-adjusted (`hcc_rep_fdr`). A locus is `hcc_replicated` if the combined " +
-  "*r* has the sign of D1 HCC and FDR < 0.05."));
+  "*r* has the sign of D1 HCC and FDR < 0.05 (missing if no cohort tested it)."));
 
 C.push(h2("D1 chronic: expression in chronic liver disease"));
-C.push(p("**Scaling.** Dividing by the total coverage lets the hepatocyte transcripts that dominate liver RNA set " +
-  "the scale; their share falls with injury, which lifted 74% of loci with fibrosis stage. In these cohorts " +
-  "ncov is therefore rescaled by median-of-ratios size factors computed within each cohort from the recount3 gene " +
-  "sums *y*_{gj} of protein-coding genes detected in ≥ 90% of samples, the top 1% by abundance left out:"));
-C.push(eq(Sub(R("s"), R("j")), R(" = exp "), Sq([Sub(R("median"), R("g")), Par([R("ln "), Sub(R("y"), R("gj")), R(" − "),
-  F(R("1"), R("n")), Sum(R("j′"), null, [R("ln "), Sub(R("y"), R("gj′"))])])]), R(",    "),
-  Sub(R("e"), R("fj")), R(" = "), Sub(R("log"), R("2")), Par([F(Sub(R("ncov"), R("fj")), Sub(R("s"), R("j"))), R(" + 0.05")])));
-C.push(p("with the *s*_{j} rescaled to geometric mean 1 per cohort."));
-C.push(p("**Per-cohort statistic.** A partial rank correlation of expression with the phenotype *y* (Hoang, Govaere: " +
+C.push(p("Expression is scaled by size factors per cohort (Section 3; Govaere: STAR gene counts). " +
+  "**Per-cohort statistic.** A partial rank correlation of expression with the phenotype *y* (Hoang, Govaere: " +
   "fibrosis stage; Suppli: NAFL + NASH = 1 vs normal-weight + obese = 0; Boldanova: HCV = 1 vs non-HCV = 0), " +
   "adjusted for *k* = 3 technical covariates (log10 input reads, % uniquely mapped reads, exonic fraction = " +
   "sum of the AUC-scaled gene sums / 10^9 in recount3, reads assigned to genes / uniquely mapped reads in Govaere). With *X* = [1, ranks of the covariates] and the hat matrix *H* = *XX*⁺, the ranks " +
@@ -223,8 +227,7 @@ C.push(p("**Parent genes.** Processed pseudogene loci can pick up reads of their
   "and ρ the median over cohorts of the Spearman correlation between locus and parent expression. The locus is " +
   "`parent_driven` if ρ ≥ 0.5, the parent itself is associated with chronic disease (FDR < 0.05) and the signs " +
   "agree (parent FDR over the parent genes tested); its cohort statistics, scored and cell-intrinsic, are then " +
-  "recomputed with the parent's expression as a (*k* + 1)th covariate, and the FDR is recomputed over all features. The threshold 0.5 was set after a first threshold of 0.8 missed " +
-  "YWHAZP2/3 (ρ ≈ 0.6)."));
+  "recomputed with the parent's expression as a (*k* + 1)th covariate, and the FDR is recomputed over all features."));
 C.push(p("**Cell-intrinsic statistic (reported, not scored).** `D1_chronic_cell` repeats the computation with the " +
   "liver cell-type marker scores as extra covariates (mean z-score of log expression of MacParland et al. 2018 " +
   "markers for hepatocytes, stellate cells, cholangiocytes, macrophages, lymphocytes and endothelial cells; " +
@@ -234,28 +237,26 @@ C.push(p("**D1 component.** D1 = 0.7 · *p*(D1_{HCC}) + 0.3 · *p*(D1_{chronic})
 C.push(h2("D2 prognosis"));
 C.push(p("For the TCGA-LIHC primary tumours with TCGA-CDR endpoints, age and AJCC stage (*n* = 341 for overall " +
   "survival, OS; 342 for the progression-free interval, PFI), Cox proportional hazards models are fitted per " +
-  "feature on standardized expression *x* = (*e* − ē)/sd(*e*), adjusted for age and late stage (III-IV vs I-II):"));
+  "feature on standardized expression *x* = (*e* − ē)/sd(*e*), adjusted for age, late stage (III-IV vs I-II) and " +
+  "the log size factor of the tumour, ln *s* (Section 3; less differentiated tumours lose hepatocyte transcripts, " +
+  "and this composition shift itself predicts survival):"));
 C.push(eq(R("h(t) = "), Sub(R("h"), R("0")), R("(t) exp("), Sub(R("β"), R("x")), R("x + "), Sub(R("β"), R("age")), R("age + "),
-  Sub(R("β"), R("stage")), R("stage),    "), Sub(R("z"), R("E")), R(" = "), F(Sub(R("b"), R("x")), [R("SE("), Sub(R("b"), R("x")), R(")")]),
+  Sub(R("β"), R("stage")), R("stage + "), Sub(R("β"), R("s")), R("ln s),    "), Sub(R("z"), R("E")), R(" = "), F(Sub(R("b"), R("x")), [R("SE("), Sub(R("b"), R("x")), R(")")]),
   R(",    D2 = "), F([Sub(R("z"), R("OS")), R(" + "), Sub(R("z"), R("PFI"))], R("2"))));
 C.push(p("D2 > 0 means higher expression with worse outcome. Hazard ratios per standard deviation, exp(*b*_{x}), " +
-  "*b*_{x} being the estimate of β_{x}, and BH-adjusted p-values are reported. Features expressed in < 20% of tumours are not tested."));
+  "*b*_{x} being the estimate of β_{x}, and BH-adjusted p-values are reported. Features expressed in < 20% of tumours are not tested. " +
+  "OS and PFI are correlated endpoints, so D2 is close to a single endpoint."));
 
-C.push(h2("D3 somatic genome"));
-C.push(p("TCGA-LIHC primary tumours (GDC GRCh38 data from the UCSC Xena GDC hub). **Copy number**: masked " +
-  "segment value (log2 ratio) at the midpoint of the locus; ρ_{CN} = Spearman correlation of CN with expression; " +
-  "gain and loss frequencies *f*_{gain}, *f*_{loss} = fractions of tumours with CN > +0.3 and < −0.3. " +
-  "**Methylation**: mean β over 450K probes within −1,500 to +500 nt of the TSS of the dominant isoform; " +
-  "ρ_{meth} = Spearman correlation of β with expression; Δβ = median β in adjacent normals − median β in " +
-  "tumours. Both ρ are partial Spearman correlations adjusted for tumour purity (ABSOLUTE calls, rank residuals " +
-  "after linear regression on the purity rank), because non-tumour cells shift expression, CN amplitude and " +
-  "methylation together. The two signed parts and the statistic are"));
-C.push(eq(Sub(R("d3"), R("CN")), R(" = max("), Sub(R("ρ"), R("CN")), R(", 0) · ("), Sub(R("f"), R("gain")), R(" − "), Sub(R("f"), R("loss")),
-  R("),    "), Sub(R("d3"), R("meth")), R(" = max(−"), Sub(R("ρ"), R("meth")), R(", 0) · clip"), Par([F(R("Δβ"), R("0.2")), R(", −1, 1")])));
-C.push(eq(R("D3 = "), Sub(R("d3"), R("CN")), R(" if |"), Sub(R("d3"), R("CN")), R("| ≥ |"), Sub(R("d3"), R("meth")), R("|, else "), Sub(R("d3"), R("meth"))));
-C.push(p("so D3 is large only when the somatic change and expression agree (CN gain with higher expression, or " +
-  "promoter hypermethylation in tumours with lower expression; D3 > 0 means expression raised by gain or loss " +
-  "of methylation). Unadjusted correlations are reported."));
+C.push(h2("D3 somatic copy number"));
+C.push(p("TCGA-LIHC primary tumours (GDC GRCh38 masked copy-number segments from the UCSC Xena GDC hub): segment " +
+  "value (log2 ratio) at the midpoint of the locus; ρ_{CN} = Spearman correlation of CN with expression, partial " +
+  "on tumour purity (ABSOLUTE calls; rank residuals after linear regression on the purity rank), because " +
+  "non-tumour cells shift expression and CN amplitude together; gain and loss frequencies *f*_{gain}, *f*_{loss} " +
+  "= fractions of tumours with CN > +0.3 and < −0.3:"));
+C.push(eq(R("D3 = max("), Sub(R("ρ"), R("CN")), R(", 0) · ("), Sub(R("f"), R("gain")), R(" − "), Sub(R("f"), R("loss")), R(")")));
+C.push(p("so D3 is large only when expression follows a frequent copy change (D3 > 0: gain, < 0: loss). The " +
+  "unadjusted correlation is reported. HCC copy-number changes span whole chromosome arms (1q and 8q gains), so " +
+  "neighbouring loci share D3."));
 
 C.push(h2("D4 germline genetics"));
 C.push(p("GWAS Catalog associations with whitelisted liver traits (EFO labels of hepatocellular carcinoma, " +
@@ -304,10 +305,12 @@ C.push(p("**Actionability** (per ORF). Tumour specificity = median *e* in TCGA-L
   "leaving out self-peptides, those that also occur in an annotated protein (GENCODE v42 translations, UniProt " +
   "human with isoforms), to which T cells are tolerant. Identified peptides: lincORF-specific HLA-I " +
   "immunopeptides (lincorfz immunopeptidomics). Percentiles are taken among all ORFs, locus-weighted (Section 2.1)."));
-C.push(p("**Fitted weights (reported, not used).** Non-negative logistic regression of literature labels on the " +
-  "component percentiles gave `disease_score_fitted`. The fit puts 0.82 on D3 because established lncRNAs " +
-  "carry more 450K promoter probes (an ascertainment effect: probe count alone gives AUC 0.81), so the default " +
-  "weights are kept."));
+C.push(p("**Fitted weights (reported, not used).** Non-negative logistic regression of literature labels " +
+  "(184 established liver-disease lncRNAs, 1,111 negatives) on the component percentiles gave " +
+  "`disease_score_fitted`: D3 0.59, D1 0.25, D4 0.16, D2 and D6 0 (cross-validated AUC 0.75; default weights " +
+  "0.67). D3 alone separates the labels (AUC 0.73), not through expression level (GTEx liver median: AUC 0.52). " +
+  "Literature labels cannot tell whether established lncRNAs follow copy number because it matters for their " +
+  "function or because lncRNAs in frequently gained regions were studied more, so the default weights are kept."));
 
 // 6
 C.push(h1("6. Quality checks and copy attribution (per ORF)"));
@@ -344,8 +347,12 @@ C.push(p("Each feature is converted to a percentile among all 11,910 ORFs, locus
 C.push(p("Conservation features are weighted by the copy-attribution confidence *a*, so that conservation counts " +
   "only as far as the alignment can be attributed to this copy:"));
 C.push(eq(Sub(R("p"), R("w")), R(" = 0.5 + ("), Sub(R("p"), R("cons")), R(" − 0.5) · a")));
+C.push(p("M1 features that rise with ORF length (translation strength, P-site share, sequence features and " +
+  "PhyloCSF; Spearman 0.16-0.54 with length over all ORFs) are ranked among the background ORFs of the same " +
+  "length bin (quintiles of the background ORF lengths), so that M1 does not reward length as such; length " +
+  "itself is not a feature."));
 C.push(table(["Class", "Features (each one percentile)"], [
-  ["M1 Encoded peptide", "translation strength (pooled log10 Bayes factor, lincorfz); fraction of the transcript's P-sites in the ORF; identified peptides (proteomics peptides absent from canonical proteins + lincORF-specific immunopeptides); independent translation (same stop as a GENCODE Ribo-seq ORF, +1 with phase 1 peptide support); PhyloCSF, *a*-weighted; ORF − non-ORF exon PhyloP100way mean over quantifiable positions (≥ 30 positions each), *a*-weighted; length (aa); sequence features = 0.5 · [TM segment, signal-like N-terminus or Pfam-A domain] + 0.5 · (1 − disordered fraction, metapredict); CRISPR screen value (Section 8)"],
+  ["M1 Encoded peptide", "translation strength (pooled log10 Bayes factor, lincorfz); fraction of the transcript's P-sites in the ORF; identified peptides (proteomics peptides absent from canonical proteins + lincORF-specific immunopeptides); independent translation (same stop as a GENCODE Ribo-seq ORF, +1 with phase 1 peptide support); PhyloCSF, *a*-weighted; ORF − non-ORF exon PhyloP100way mean over quantifiable positions (≥ 30 positions each), *a*-weighted; sequence features = 0.5 · [TM segment, signal-like N-terminus or Pfam-A domain] + 0.5 · (1 − disordered fraction, metapredict); CRISPR screen value (Section 8)"],
   ["M2 Translation-coupled RNA regulation", "NMD substrate (stop > 50 nt upstream of the last exon junction); NMD sensitivity (below)"],
   ["M3 Cis-regulation of a neighbour", "divergent (TSSs ≤ 5 kb, head-to-head) or antisense position to a protein-coding gene; co-expression excess with the nearest protein-coding gene (≤ 100 kb): Spearman ρ over TCGA-LIHC + GTEx liver minus the median ρ of nearest protein-coding pairs in the same distance bin (0-5, 5-20, 20-50, 50-100 kb); nuclear enrichment; enhancer-like TSS chromatin, log2((H3K4me1 + 1)/(H3K4me3 + 1)) at active TSSs (H3K27ac ≥ 2-fold; inactive lowest); low polysome association (−MRL percentile)"],
   ["M4 Trans-acting RNA, nuclear", "nuclear enrichment; copy number (log2 TPM HepG2); eCLIP enrichment of nuclear RBPs"],
@@ -394,18 +401,21 @@ C.push(p("`crispr_screen_value` = Prensner's secondary-screen verdict where it e
 // 9
 C.push(h1("9. Positive controls"));
 C.push(p("Each score has positive controls, chosen in advance and processed like the candidates. Controls that " +
-  "fail are reported, not fixed by tuning weights. Result on run v2:"));
+  "fail are reported, not fixed by tuning weights. The mechanism controls are feature checks: they show that " +
+  "the features of a class are defined as intended, not that the mechanism is detected, as several pass on " +
+  "annotation features alone (divergent position, small-RNA host status) and M4 on the very high abundance of " +
+  "MALAT1 and NEAT1. Result on run v2:"));
 C.push(table(["Score", "Control", "Expectation", "Result"], [
-  ["D1 HCC", "HULC (up), LINC00261 (down)", "correct direction, FDR < 0.05", "pass, pass"],
-  ["D1 HCC replication", "HULC (up), LINC00261 (down)", "correct direction, FDR < 0.05", "fail (HULC r −0.05: down in GSE77509, up in GSE94660), pass"],
+  ["D1 HCC", "HULC (up), LINC00261 (down)", "correct direction, FDR < 0.05", "fail (HULC *r* 0.30, FDR 0.11), pass"],
+  ["D1 HCC replication", "HULC (up), LINC00261 (down)", "correct direction, FDR < 0.05", "fail (HULC *r* −0.46: down in all four cohorts), pass"],
   ["D1 chronic", "COL1A1", "Hoang ρ > 0, p < 0.05", "pass"],
-  ["D2", "BIRC5, CYTOR", "HR > 1", "pass, pass"],
-  ["D3", "PVT1; MEG3; GSTP1 (post hoc)", "ρ_{CN} > 0 and D3 > 0; ρ_{meth} < 0", "pass; fail (MEG3 is positively correlated with promoter methylation in TCGA-LIHC); pass"],
+  ["D2", "BIRC5, CYTOR", "HR > 1", "pass (1.35), pass (1.27)"],
+  ["D3", "PVT1", "ρ_{CN} > 0 (FDR < 0.05) and D3 > 0", "pass"],
   ["D4", "PNPLA3, TM6SF2", "liver-trait GWAS hit", "pass, pass"],
   ["D5", "HULC; LINC01090", "high; no LINC01089 papers credited", "pass, pass"],
-  ["D6", "HNF1A-AS1", "liver-specific (D6 ≥ 0.75)", "fail"],
-  ["disease / HCC score", "HULC, H19", "> 90th percentile of the background", "fail, fail"],
-  ["chronic score", "COL1A1, PNPLA3, TM6SF2", "> 90th percentile", "pass, fail (0.57 vs 0.71), pass"],
+  ["D6", "HNF1A-AS1", "liver-specific (D6 ≥ 0.75)", "fail (0.71)"],
+  ["disease / HCC score", "HULC, H19", "> 90th percentile of the background", "fail, fail (H19 is lower in tumours: *r* −0.77)"],
+  ["chronic score", "COL1A1, PNPLA3, TM6SF2", "> 90th percentile", "pass, fail (0.61 vs 0.71), pass"],
   ["actionability", "GPC3 (FVGEFFTDV, HLA-A*02:01)", "tumour-specific; presentation percentile ≤ 2", "pass, pass"],
   ["M1", "MTLN, SPAAR", "top class (highest *z*)", "not evaluable (not lincorfz loci)"],
   ["M2", "GAS5, ZFAS1", "M2 score ≥ 0.6", "pass, pass"],
@@ -420,9 +430,9 @@ C.push(gap());
 C.push(h1("10. Data and software"));
 C.push(table(["Resource", "Use"], [
   ["GENCODE v42 (GRCh38)", "annotation, protein-coding translations"],
-  ["recount3 (TCGA-LIHC, GTEx, SRA SRP197353, SRP186450, SRP078450)", "base-level coverage, gene sums, QC metadata"],
+  ["recount3 (TCGA-LIHC, GTEx, SRA SRP197353, SRP186450, SRP078450, SRP068976, SRP069212, SRP099053, SRP040998)", "base-level coverage, gene sums, QC metadata"],
   ["TCGA-CDR (Liu et al. 2018); ABSOLUTE purity (PanCanAtlas)", "survival endpoints; tumour purity"],
-  ["UCSC Xena GDC hub", "TCGA-LIHC masked copy number, 450K methylation, probe map"],
+  ["UCSC Xena GDC hub", "TCGA-LIHC masked copy number"],
   ["GWAS Catalog; GTEx v8 liver eQTLs", "D4"],
   ["Europe PMC REST API; HGNC", "D5"],
   ["ENCODE HepG2 (CeFra-seq, eCLIP, histone ChIP-seq); Van Nostrand et al. 2020", "M3-M5 features"],

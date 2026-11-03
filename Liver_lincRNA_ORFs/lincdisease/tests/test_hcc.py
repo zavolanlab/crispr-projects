@@ -38,3 +38,11 @@ def test_replication_combines_cohorts():
     assert res.loc["x", "hcc_rep_pairs"] == 20 and res.loc["x", "hcc_rep_n_cohorts"] == 2
     assert res.loc["x", "hcc_rep_p"] < 1e-3
     assert abs(res.loc["flat", "hcc_rep_r"]) < 0.6
+
+
+def test_replicated_missing_when_untested():
+    rep = pd.DataFrame({"hcc_rep_r": [0.5, -0.5, 0.5, np.nan], "hcc_rep_fdr": [0.01, 0.01, 0.2, np.nan]},
+                       index=list("abcd"))
+    d1 = pd.Series([0.3, 0.3, 0.3, 0.3], index=list("abcd"))
+    out = hcc.replicated(rep, d1)
+    assert out["a"] is True and out["b"] is False and out["c"] is False and pd.isna(out["d"])

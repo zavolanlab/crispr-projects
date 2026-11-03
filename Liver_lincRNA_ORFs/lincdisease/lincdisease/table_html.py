@@ -36,7 +36,7 @@ COLUMNS = [
 
     ("Disease components", "comp_D1", "D1", "score", "disease-associated expression: 0.7 HCC + 0.3 chronic (percentile)"),
     ("Disease components", "comp_D2", "D2", "score", "prognosis, TCGA-LIHC Cox OS and PFI (percentile of |z|)"),
-    ("Disease components", "comp_D3", "D3", "score", "somatic copy number / promoter methylation (percentile)"),
+    ("Disease components", "comp_D3", "D3", "score", "somatic copy number (percentile)"),
     ("Disease components", "comp_D4", "D4", "score", "liver-trait GWAS within +-50 kb (percentile)"),
     ("Disease components", "comp_D5", "D5", "score", "liver literature, Europe PMC (percentile)"),
     ("Disease components", "comp_D6", "D6", "score", "liver context: GTEx liver level and specificity, HepG2/Huh7 (percentile)"),
@@ -55,7 +55,7 @@ COLUMNS = [
 
     ("D1 HCC detail", "log2FC_paired", "log2FC T/N", "num", "mean log2 fold change, tumour vs adjacent normal (50 pairs)"),
     ("D1 HCC detail", "fdr_paired", "FDR T/N", "p", "Wilcoxon signed-rank, BH"),
-    ("D1 HCC detail", "auc_vs_gtex", "AUC vs GTEx", "num", "tumours vs GTEx liver, (r + 1) / 2"),
+    ("D1 HCC detail", "auc_vs_gtex", "AUC vs GTEx", "num", "tumours vs GTEx liver, (r + 1) / 2 (reported, not scored: study batch)"),
     ("D1 HCC detail", "fdr_vs_gtex", "FDR vs GTEx", "p", "Mann-Whitney, BH"),
     ("D1 HCC detail", "hcc_rep_r", "r replication", "num",
      "paired rank-biserial r, tumour vs adjacent normal in 4 independent cohorts (GSE77314, GSE77509, GSE94660, "
@@ -87,13 +87,11 @@ COLUMNS = [
     ("D2 detail", "HR_PFI", "HR PFI", "num", "progression-free interval"),
     ("D2 detail", "fdr_PFI", "FDR PFI", "p", ""),
 
-    ("D3 detail", "stat_D3", "D3", "num", "signed somatic statistic (> 0: raised by copy gain / loss of methylation)"),
+    ("D3 detail", "stat_D3", "D3", "num", "signed somatic statistic (> 0: expression follows a copy gain)"),
     ("D3 detail", "cn_rho", "rho CN", "num", "purity-adjusted Spearman, copy number vs expression"),
     ("D3 detail", "cn_fdr", "FDR CN", "p", ""),
     ("D3 detail", "cn_gain_freq", "CN gain freq", "num", "fraction of tumours with log2 ratio > 0.3"),
     ("D3 detail", "cn_loss_freq", "CN loss freq", "num", "fraction of tumours with log2 ratio < -0.3"),
-    ("D3 detail", "meth_rho", "rho meth", "num", "purity-adjusted Spearman, promoter beta vs expression"),
-    ("D3 detail", "meth_fdr", "FDR meth", "p", ""),
 
     ("D4 detail", "gwas_top_trait", "Top GWAS trait", "text", "liver trait of the strongest association within +-50 kb"),
     ("D4 detail", "gwas_top_snp", "Top SNP", "text", ""),
@@ -126,24 +124,22 @@ COLUMNS = [
      "mean PhyloP100way over the ORF minus over the rest of the transcript's exons"),
 
     *[("Mechanism features (percentiles)", f"pct_{f}", lab, "score", desc) for f, lab, desc in [
-        ("m1_translation", "M1 translation", "pooled log10 Bayes factor of translation"),
-        ("m1_orf_share", "M1 ORF P-site share", "fraction of the transcript's P-sites in the ORF"),
+        ("m1_translation", "M1 translation", "pooled log10 Bayes factor of translation (within length bin)"),
+        ("m1_orf_share", "M1 ORF P-site share", "fraction of the transcript's P-sites in the ORF (within length bin)"),
         ("m1_peptides", "M1 peptides", "identified peptides (proteomics + HLA-I)"),
         ("m1_independent_translation", "M1 GENCODE Ribo-seq", "same stop as a GENCODE Ribo-seq ORF (+ peptide support)"),
-        ("m1_phylocsf_weighted", "M1 PhyloCSF", "weighted by copy-attribution confidence"),
+        ("m1_phylocsf_weighted", "M1 PhyloCSF", "within length bin, weighted by copy-attribution confidence"),
         ("m1_phylop_contrast_weighted", "M1 PhyloP contrast", "ORF minus exon PhyloP, weighted by copy attribution"),
-        ("m1_length", "M1 length", "ORF length"),
-        ("m1_sequence_features", "M1 sequence", "TM / signal-like / Pfam, and order"),
+        ("m1_sequence_features", "M1 sequence", "TM / signal-like / Pfam, and order (within length bin)"),
         ("m1_crispr_screen", "M1 CRISPR", "screen value"),
         ("m2_nmd", "M2 NMD", "stop > 50 nt upstream of the last exon junction"),
-        ("m2_nmd_sensitivity", "M2 NMD sensitivity", "log2FC upon UPF1 or SMG6 + SMG7 knock-down (HeLa)"),
+        ("m2_nmd_sensitivity", "M2 NMD sensitivity", "mean log2FC upon UPF1 and SMG6 + SMG7 knock-down (HeLa)"),
         ("m3_neighbour_position", "M3 position", "divergent or antisense to a protein-coding gene"),
         ("m3_coexpression", "M3 co-expression", "excess co-expression with the nearest coding gene"),
         ("m3_nuclear", "M3 nuclear", "HepG2 nuclear enrichment"),
         ("m3_enhancer_chromatin", "M3 enhancer", "enhancer-like chromatin at the TSS"),
         ("m3_low_polysome", "M3 low polysome", "low mean ribosome load"),
         ("m4_copy_number", "M4 copy number", "HepG2 TPM"),
-        ("m4_no_cis", "M4 no cis", "not divergent / antisense"),
         ("m4_nuclear", "M4 nuclear", "HepG2 nuclear enrichment"),
         ("m4_eclip_nuclear", "M4 eCLIP nuclear", "binding by nuclear RBPs"),
         ("m5_cytoplasmic", "M5 cytoplasmic", "HepG2 cytoplasmic enrichment"),
@@ -180,20 +176,20 @@ INDEX = [
                                "components count 0.5, so a score near 0.5 with low coverage means unknown."),
     ]),
     ("Disease components (per locus)", [
-        ("D1", "Disease-associated expression. HCC: rank-biserial effect of TCGA-LIHC tumours vs paired normals "
-               "and vs GTEx liver. Chronic: partial rank correlation with fibrosis stage (Hoang) and HCV status "
+        ("D1", "Disease-associated expression. HCC: rank-biserial effect of TCGA-LIHC tumours vs paired adjacent "
+               "normals. Chronic: partial rank correlation with fibrosis stage (Hoang and Govaere) and HCV status "
                "(Boldanova), adjusted for technical covariates and parent genes."),
         ("D2", "Prognosis: Cox models of overall survival and progression-free interval in TCGA-LIHC, adjusted for "
-               "age and stage."),
-        ("D3", "Somatic genome: copy number and promoter methylation that agree with expression in TCGA-LIHC, "
+               "age, stage and tumour composition (log size factor)."),
+        ("D3", "Somatic copy number: frequent copy gains or losses that expression follows in TCGA-LIHC, "
                "purity-adjusted."),
         ("D4", "Germline genetics: strongest liver-trait GWAS association within 50 kb."),
         ("D5", "Prior knowledge: liver papers in Europe PMC (exact symbol, RNA term, liver term)."),
         ("D6", "Liver context: expression level and specificity in GTEx liver, and in HepG2/Huh7."),
     ]),
     ("Mechanism classes (per ORF)", [
-        ("M1", "Encoded peptide: translation strength, peptides, conservation (copy-weighted), length, sequence "
-               "features, CRISPR screens."),
+        ("M1", "Encoded peptide: translation strength, peptides, conservation (copy-weighted), sequence "
+               "features, CRISPR screens; length-dependent features ranked within ORF-length bins."),
         ("M2", "Translation-coupled RNA regulation: NMD substrate, measured NMD sensitivity."),
         ("M3", "Cis-regulation of a neighbour: divergent/antisense position, excess co-expression with the nearest "
                "coding gene, nuclear enrichment, enhancer-like chromatin, low polysome association."),
@@ -212,10 +208,10 @@ INDEX = [
 def rows(orfs, support, mechanism, disease, peptides, hla, min_screen=1):
     """Candidates and screen-supported ORFs (screen value >= min_screen) with all COLUMNS."""
     t = orfs.set_index("orf_id", drop=False)
-    t = t.join(support.set_index("orf_id"), rsuffix="_support")
+    t = t.join(support.set_index("orf_id"), how="left", suffixes=("", "_support"))
     t = t.join(mechanism.set_index("orf_id")[[c for c in mechanism.columns if c.startswith("pct_") and c not in t]])
     t = t.join(peptides[["n_specific_peptides", "n_hla_specific"]]).join(hla[["hla_any_n_binders"]])
-    locus_cols = [c for c in ("stat_D3", "cn_rho", "cn_fdr", "cn_gain_freq", "cn_loss_freq", "meth_rho", "meth_fdr")
+    locus_cols = [c for c in ("stat_D3", "cn_rho", "cn_fdr", "cn_gain_freq", "cn_loss_freq")
                   if c in disease]
     t = t.join(disease[locus_cols], on="locus_id")
     cand = t["is_candidate"].astype(bool)

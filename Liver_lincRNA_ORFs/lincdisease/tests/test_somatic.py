@@ -4,13 +4,6 @@ import pandas as pd
 from lincdisease import somatic
 
 
-def test_tss_windows_strand():
-    t = pd.DataFrame({"feature_id": ["a", "b"], "chrom": "chr1", "start0": [1000, 5000], "end1": [2000, 6000],
-                      "strand": ["+", "-"]})
-    w = somatic.tss_windows(t, upstream=100, downstream=10)
-    assert list(w["start0"]) == [900, 5989] and list(w["end1"]) == [1011, 6100]
-
-
 def test_cn_at_midpoint():
     spans = pd.DataFrame({"chrom": ["chr1", "chr1", "chr2"], "start0": [0, 300, 0], "end1": [100, 500, 10]},
                          index=["a", "b", "c"])
@@ -26,17 +19,16 @@ def test_d3_sign():
     ids = [f"TCGA-AA-{i:04d}-01A" for i in range(n)]
     samples = pd.DataFrame({"source": "tcga", "sample_id": [f"tcga:{i}" for i in range(n)],
                             "tcga_barcode": [b + "-11R" for b in ids]})
-    cn_gain = rng.uniform(0, 1, n)            # mostly gained, dosage-driven
-    beta = rng.uniform(0, 1, n)               # silencing by methylation
-    expr = pd.DataFrame([cn_gain + rng.normal(0, 0.05, n), 1 - beta + rng.normal(0, 0.05, n)],
-                        index=["onc", "sup"], columns=samples["sample_id"])
-    cn = pd.DataFrame([cn_gain, np.zeros(n)], index=["onc", "sup"], columns=ids)
-    normals = [f"TCGA-AA-{i:04d}-11A" for i in range(10)]
-    b = pd.DataFrame(np.c_[np.vstack([np.full(n, 0.5), beta]), np.vstack([np.full(10, 0.5), np.full(10, 0.1)])],
-                     index=["onc", "sup"], columns=ids + normals)
-    res = somatic.d3(expr, samples, cn, b)
-    assert res.loc["onc", "D3"] > 0.3 and res.loc["onc", "D3_source"] == "cn"
-    assert res.loc["sup", "D3"] < 0 and res.loc["sup", "D3_source"] == "meth"
+    gain = rng.uniform(0, 1, n)               # mostly gained, dosage-driven
+    loss = -rng.uniform(0, 1, n)              # mostly lost, dosage-driven
+    flat = rng.uniform(0, 1, n)               # gained, expression unrelated
+    expr = pd.DataFrame([gain + rng.normal(0, 0.05, n), loss + rng.normal(0, 0.05, n), rng.normal(0, 1, n)],
+                        index=["onc", "sup", "none"], columns=samples["sample_id"])
+    cn = pd.DataFrame([gain, loss, flat], index=["onc", "sup", "none"], columns=ids)
+    res = somatic.d3(expr, samples, cn)
+    assert res.loc["onc", "D3"] > 0.3
+    assert res.loc["sup", "D3"] < -0.3
+    assert abs(res.loc["none", "D3"]) < 0.2
 
 
 def test_partial_spearman_removes_confounder():
@@ -51,9 +43,3 @@ def test_partial_spearman_removes_confounder():
 def stats_rho(x, y):
     from scipy import stats
     return stats.spearmanr(x, y)[0]
-
-
-def test_dominant_isoforms():
-    t = pd.DataFrame({"feature_id": ["a", "a", "ctrl:B", "ctrl:B"], "transcript_id": ["a1", "a2", "b1", "b2"],
-                      "TPM_max": [1.0, 5.0, np.nan, np.nan], "canonical": [False, False, False, True]})
-    assert list(somatic.dominant_isoforms(t)["transcript_id"]) == ["a2", "b2"]

@@ -1,41 +1,38 @@
 """
-Command-line driver of lincdisease; one sub-command per step of LOGIC.md, each writing into --out-dir.
+Command-line driver of lincdisease; one sub-command per step of LOGIC.md, each writing into --out-dir. The workflow
+(workflow/Snakefile) runs them; to run one by hand, from the output directory:
 
-  python -m lincdisease fetch    --data-dir D --out-dir O   (login node: all downloads)
-  python -m lincdisease qc       --results-dir R --candidates T --data-dir D --peptides-dir P --out-dir O
-  python -m lincdisease homology --results-dir R --candidates T --data-dir D --out-dir O [--diamond PATH]
-  python -m lincdisease peptide  --results-dir R --candidates T --data-dir D --out-dir O --tool-env ENV
-  python -m lincdisease support  --results-dir R --candidates T --data-dir D --out-dir O [--phylop BIGWIG]
-  python -m lincdisease regions  --results-dir R --candidates T --data-dir D --out-dir O
-  python -m lincdisease manifest --out-dir O [--gtex-per-tissue 10]
-  python -m lincdisease quant    --out-dir O --project LIHC [--worker 0 --n-workers 4] [--scratch S]
-  python -m lincdisease chronic  --out-dir O --manifest; then quant --sample-set quant_sra; then chronic --out-dir O --data-dir D
-  python -m lincdisease nmd      --out-dir O --manifest; then quant --sample-set quant_nmd; then nmd --out-dir O --data-dir D
-  python -m lincdisease literature --results-dir R --candidates T --data-dir D --out-dir O
-  python -m lincdisease genetics --results-dir R --candidates T --data-dir D --out-dir O
-  python -m lincdisease somatic  --results-dir R --candidates T --data-dir D --out-dir O
-  python -m lincdisease encode   --results-dir R --candidates T --data-dir D --out-dir O
-  python -m lincdisease mechanism --results-dir R --candidates T --data-dir D --out-dir O
-  python -m lincdisease disease  --results-dir R --candidates T --data-dir D --out-dir O
-  python -m lincdisease weights  --results-dir R --candidates T --data-dir D --out-dir O   (disease_score_fitted.tsv)
-  python -m lincdisease report   --results-dir R --candidates T --data-dir D --out-dir O
-  python -m lincdisease html     --out-dir O
+  PYTHONPATH=<lincdisease dir> python -m lincdisease --out-dir . <step> [options]
 
-R: lincorfz results/ directory (background); T: candidate ORF table; D: download cache of public resources.
+--out-dir comes before the step. Options of the steps that start from the lincorfz run:
+  --results-dir R (lincorfz results/ directory, the background), --candidates T (candidate ORF table),
+  --data-dir D (download cache of public resources).
+
+  fetch      --data-dir D                       all downloads (login node)
+  qc, homology, peptide, support, regions, literature, genetics, somatic, encode, mechanism, disease, weights,
+  report     R T D [step options]
+  manifest   --data-dir D                       recount3 samples of TCGA-LIHC and GTEx (login node)
+  quant      [--sample-set quant] [--worker i --n-workers n] [--features ... --sums-dir sums_<name>]
+                                                stream recount3 bigWigs (login node)
+  scaling    --data-dir D                       size factors of the TCGA-LIHC / GTEx samples
+  chronic    --manifest | --data-dir D [--govaere-dir ...]     D1 chronic liver disease (quant_sra/)
+  nmd        --manifest | --data-dir D          M2 NMD sensitivity (quant_nmd/)
+  hcc        --manifest | --data-dir D          D1 HCC replication (quant_hcc/)
+  html                                          lincdisease.table.html
+
+`python -m lincdisease --out-dir . <step> --help` lists the options of a step.
 """
 import argparse
+import glob
+import json
 import os
 
 import numpy as np
 import pandas as pd
 
-import glob
-
-import json
-
-from . import (chromatin, chronic, controls, disease, eclip, encode, eqtl, genetics, hcc, homology, inputs, integrate,
-               hla, literature, mechanism, nmd, peptide, qc, quant, report, resources, screens, somatic, weights)
-from . import scoring, table_html
+from . import (chromatin, chronic, controls, disease, eclip, encode, eqtl, expression, genetics, hcc, hla, homology,
+               inputs, integrate, literature, mechanism, nmd, peptide, qc, quant, report, resources, scoring, screens,
+               somatic, table_html, weights)
 
 
 def _common(p):
@@ -162,11 +159,16 @@ TCGA_COLUMNS = ["tcga_barcode", "cgc_sample_sample_type", "gdc_cases.case_id", "
 GTEX_COLUMNS = ["SUBJID", "SMTS", "SMTSD", "SEX", "AGE"]
 
 
+def tcga_gtex_projects(data_dir):
+    """(source, project) of the quant/ sample set: TCGA-LIHC, then every GTEx tissue."""
+    projects = pd.read_csv(resources.fetch("gtex_projects", data_dir), sep="\t")["project"].unique()
+    return [("tcga", "LIHC")] + [("gtex", p) for p in sorted(set(projects) - {"STUDY_NA"})]   # STUDY_NA: unknown
+
+
 def cmd_manifest(args):
     """TCGA-LIHC (all samples), GTEx liver (all) and up to --gtex-per-tissue samples of every other GTEx tissue."""
     parts = [quant.manifest("tcga", "LIHC", TCGA_COLUMNS)]
-    projects = pd.read_csv(resources.fetch("gtex_projects", args.data_dir), sep="\t")["project"].unique()
-    for project in sorted(set(projects) - {"STUDY_NA"}):   # STUDY_NA: tissue unknown
+    for _, project in tcga_gtex_projects(args.data_dir)[1:]:
         m = quant.manifest("gtex", project, GTEX_COLUMNS)
         if project != "LIVER" and len(m) > args.gtex_per_tissue:
             m = m.sample(args.gtex_per_tissue, random_state=args.seed)
@@ -176,6 +178,37 @@ def cmd_manifest(args):
     os.makedirs(d, exist_ok=True)
     man.to_csv(os.path.join(d, "samples.tsv"), sep="\t", index=False)
     print(man.groupby(["source", "project"]).size().to_string())
+
+
+def cmd_scaling(args):
+    """Size factors of the TCGA-LIHC and GTEx samples (quant/size_factors.tsv), over all of them together, since
+    tumours, adjacent normals and the GTEx tissues are compared with each other (D1, D6, tumour specificity)."""
+    ncov, samples, _ = expression.load(args.out_dir)
+    pc = expression.protein_coding_ids(resources.fetch("gencode_gtf", args.data_dir))
+    projects = {(s, p) for s, p in zip(samples["source"], samples["project"])}
+    genes = pd.concat([quant.read_gene_sums(resources.fetch(f"{s}_{p}_genes", args.data_dir,
+                                                            url=quant.gene_sums_url(s, p)), s, samples)
+                       for s, p in tcga_gtex_projects(args.data_dir) if (s, p) in projects], axis=1)
+    missing = samples["sample_id"][~samples["sample_id"].isin(genes.columns)]
+    if len(missing):
+        raise ValueError(f"no gene sums for {len(missing)} samples ({list(missing[:3])})")
+    sf = expression.size_factors(genes[genes.index.isin(pc)])
+    path = os.path.join(args.out_dir, "quant", "size_factors.tsv")
+    sf.rename("size_factor").to_csv(path, sep="\t", index_label="sample_id")
+    print(f"wrote {path}; median by group:")
+    grp = samples.set_index("sample_id")
+    grp = np.where(grp["source"] == "tcga", "TCGA " + grp["cgc_sample_sample_type"].astype(str), "GTEx " + grp["project"])
+    print(sf.groupby(pd.Series(grp, index=samples["sample_id"]).reindex(sf.index)).median().round(2).to_string())
+
+
+def tcga_gtex_expression(out_dir, pseudocount):
+    """Size-factor scaled ncov of the TCGA-LIHC / GTEx samples, log2(ncov + pseudocount), samples, features and
+    the size factors."""
+    ncov, samples, feats = expression.load(out_dir)
+    sf = expression.read_size_factors(out_dir)
+    ncov = expression.scaled(ncov, sf)
+    samples = samples[samples["sample_id"].isin(ncov.columns)]
+    return ncov, disease.log_expr(ncov, pseudocount), samples, feats, sf
 
 
 def cmd_quant(args):
@@ -207,12 +240,9 @@ def cmd_chronic(args):
         os.makedirs(d, exist_ok=True)
         chronic.manifest().to_csv(os.path.join(d, "samples.tsv"), sep="\t", index=False)
         return
-    sums = read_sums(d)
-    feats = pd.read_csv(os.path.join(args.out_dir, "quant", "features.tsv"), sep="\t", index_col=0)
-    samples = pd.read_csv(os.path.join(d, "samples.tsv"), sep="\t")
-    samples = samples[samples["sample_id"].isin(sums["sample_id"])]
+    ncov, samples, feats = expression.load(args.out_dir, "quant_sra")
     # loci that cannot be measured in unstranded RNA-seq are not tested (and stay out of the BH family)
-    ncov = quant.normalize(sums, feats, samples).loc[lambda x: x.index.isin(quantifiable(feats))]
+    ncov = ncov.loc[ncov.index.isin(expression.quantifiable(feats))]
     genes = pd.concat([quant.read_gene_sums(resources.fetch(f"sra_{p}_genes", args.data_dir,
                                                             url=quant.gene_sums_url("sra", p)), "sra", samples)
                        for p in chronic.COHORTS.values()], axis=1)
@@ -224,12 +254,14 @@ def cmd_chronic(args):
     gtf["gene_id"] = gtf["gene_id"].str.split(".").str[0]
     symbol_to_id = dict(zip(gtf["gene_name"], gtf["gene_id"]))
     # parent gene of each locus: the homology parent of its ORF with the highest identity
-    orfq = pd.read_csv(os.path.join(args.out_dir, "qc.orfs.tsv"), sep="\t").dropna(subset=["homolog_parent"])
-    best = orfq.sort_values("homolog_pident", ascending=False).drop_duplicates("locus_id").set_index("locus_id")
+    orf_qc = pd.read_csv(os.path.join(args.out_dir, "qc.orfs.tsv"), sep="\t").dropna(subset=["homolog_parent"])
+    best = orf_qc.sort_values("homolog_pident", ascending=False).drop_duplicates("locus_id").set_index("locus_id")
     parents = best["homolog_parent"].map(symbol_to_id).dropna()
     pheno = samples.set_index("sample_id")[["cohort", "fibrosis_stage", "nas", "group"]]
     if args.govaere_dir:
-        g_ncov, g_genes, g_qc, g_pheno = chronic.govaere(args.govaere_dir, args.govaere_runs, args.govaere_soft)
+        regions = pd.read_csv(os.path.join(args.out_dir, "quant", "regions.tsv"), sep="\t")
+        g_ncov, g_genes, g_qc, g_pheno = chronic.govaere(args.govaere_dir, args.govaere_runs, args.govaere_soft,
+                                                         regions, exclude=args.govaere_exclude)
         print(f"Govaere: {len(g_pheno)} runs")
         missing = ncov.index.difference(g_ncov.index)
         if len(missing):
@@ -256,15 +288,11 @@ def cmd_nmd(args):
         os.makedirs(d, exist_ok=True)
         nmd.manifest().to_csv(os.path.join(d, "samples.tsv"), sep="\t", index=False)
         return
-    sums = read_sums(d)
-    feats = pd.read_csv(os.path.join(args.out_dir, "quant", "features.tsv"), sep="\t", index_col=0)
-    samples = pd.read_csv(os.path.join(d, "samples.tsv"), sep="\t")
-    samples = samples[samples["sample_id"].isin(sums["sample_id"])]
-    ncov = quant.normalize(sums, feats, samples).loc[lambda x: x.index.isin(quantifiable(feats))]
+    ncov, samples, feats = expression.load(args.out_dir, "quant_nmd")
+    ncov = ncov.loc[ncov.index.isin(expression.quantifiable(feats))]
     genes = quant.read_gene_sums(resources.fetch(f"sra_{nmd.PROJECT}_genes", args.data_dir,
                                                  url=quant.gene_sums_url("sra", nmd.PROJECT)), "sra", samples)
-    gtf = quant.read_gtf_exons(resources.fetch("gencode_gtf", args.data_dir)).drop_duplicates("gene_id")
-    pc = gtf.loc[gtf["gene_type"] == "protein_coding", "gene_id"].str.split(".").str[0]
+    pc = expression.protein_coding_ids(resources.fetch("gencode_gtf", args.data_dir))
     res = nmd.sensitivity(ncov, samples, genes[genes.index.isin(pc)], pseudocount=args.pseudocount)
     res = res.reindex(feats.index)
     path = os.path.join(args.out_dir, "nmd.loci.tsv")
@@ -283,12 +311,15 @@ def cmd_hcc(args):
         man.to_csv(os.path.join(d, "samples.tsv"), sep="\t", index=False)
         print(man.groupby(["cohort", "tissue"])["patient"].nunique().to_string())
         return
-    sums = read_sums(d)
-    feats = pd.read_csv(os.path.join(args.out_dir, "quant", "features.tsv"), sep="\t", index_col=0)
-    samples = pd.read_csv(os.path.join(d, "samples.tsv"), sep="\t")
-    samples = samples[samples["sample_id"].isin(sums["sample_id"])]
-    ncov = quant.normalize(sums, feats, samples).loc[lambda x: x.index.isin(quantifiable(feats))]
-    res = hcc.replication(ncov, samples, pseudocount=args.pseudocount).reindex(feats.index)
+    ncov, samples, feats = expression.load(args.out_dir, "quant_hcc")
+    ncov = ncov.loc[ncov.index.isin(expression.quantifiable(feats))]
+    pc = expression.protein_coding_ids(resources.fetch("gencode_gtf", args.data_dir))
+    genes = pd.concat([quant.read_gene_sums(resources.fetch(f"sra_{p}_genes", args.data_dir,
+                                                            url=quant.gene_sums_url("sra", p)), "sra", samples)
+                       for p in hcc.COHORTS.values()], axis=1)
+    sf = hcc.size_factors(genes[genes.index.isin(pc)], samples)
+    sf.rename("size_factor").to_csv(os.path.join(d, "size_factors.tsv"), sep="\t", index_label="sample_id")
+    res = hcc.replication(expression.scaled(ncov, sf), samples, pseudocount=args.pseudocount).reindex(feats.index)
     path = os.path.join(args.out_dir, "D1.hcc_replication.tsv")
     res.to_csv(path, sep="\t", index_label="feature_id")
     print(f"wrote {path}; tested {res['hcc_rep_r'].notna().sum()}, FDR < 0.05: {(res['hcc_rep_fdr'] < 0.05).sum()}")
@@ -322,41 +353,16 @@ def cmd_genetics(args):
     print(f"eqtl: tested {len(res)}, eGenes {res['eqtl_egene'].sum()}, GWAS-linked {(res['eqtl_gwas_mlog10p'] > 0).sum()}")
 
 
-def feature_transcripts(results_dir, data_dir):
-    """Isoforms of every locus and control as feature_id/transcript_id/chrom/start0/end1/strand, with TPM_max
-    (loci) and the Ensembl canonical flag (controls)."""
-    tx = pd.read_csv(os.path.join(results_dir, "lincRNAs", "lincRNA_transcripts.tsv"), sep="\t")
-    tx = tx.rename(columns={"gene_id": "feature_id"})[["feature_id", "transcript_id", "chrom", "start0", "end1",
-                                                        "strand", "TPM_max"]]
-    gtf = resources.fetch("gencode_gtf", data_dir)
-    gencode = quant.read_gtf_exons(gtf)
-    ctrl = gencode[gencode["gene_name"].isin(controls.control_genes())]
-    ctrl = ctrl.groupby("transcript_id").agg(feature_id=("gene_name", "first"), chrom=("chrom", "first"),
-                                             start0=("start0", "min"), end1=("end1", "max"),
-                                             strand=("strand", "first")).reset_index()
-    ctrl["feature_id"] = "ctrl:" + ctrl["feature_id"]
-    ctrl["canonical"] = ctrl["transcript_id"].isin(somatic.canonical_transcripts(gtf))
-    return pd.concat([tx.assign(canonical=False), ctrl], ignore_index=True)
-
-
 def cmd_somatic(args):
-    ncov, expr, samples, feats = load_expression(args.out_dir, args.pseudocount)
+    _, expr, samples, feats, _ = tcga_gtex_expression(args.out_dir, args.pseudocount)
     segments = pd.read_csv(resources.fetch("tcga_lihc_cn", args.data_dir), sep="\t")
     cn = somatic.cn_at(feats[["chrom", "start0", "end1"]], segments)
-    windows = somatic.tss_windows(somatic.dominant_isoforms(feature_transcripts(args.results_dir, args.data_dir)))
-    probes = somatic.promoter_probes(windows, somatic.read_probemap(resources.fetch("hm450_probemap", args.data_dir)))
-    beta = somatic.read_methylation(resources.fetch("tcga_lihc_methylation", args.data_dir),
-                                    sorted({p for v in probes.values() for p in v}))
-    pb = somatic.promoter_beta(beta, probes)
-    pb["n_probes"] = pd.Series({f: len(p) for f, p in probes.items()})
     purity = somatic.read_purity(resources.fetch("tcga_purity", args.data_dir))
-    q = quantifiable(feats)
-    res = somatic.d3(expr.loc[expr.index.isin(q)], samples, cn, pb.drop(columns="n_probes"), purity=purity)
-    res = res.reindex(feats.index)
-    res["meth_n_probes"] = pb["n_probes"].reindex(res.index).fillna(0).astype(int)
+    q = expression.quantifiable(feats)
+    res = somatic.d3(expr.loc[expr.index.isin(q)], samples, cn, purity=purity).reindex(feats.index)
     path = os.path.join(args.out_dir, "D3.somatic.tsv")
     res.to_csv(path, sep="\t", index_label="feature_id")
-    print(f"wrote {path}; CN tested {res['cn_rho'].notna().sum()}, methylation tested {res['meth_rho'].notna().sum()}")
+    print(f"wrote {path}; CN tested {res['cn_rho'].notna().sum()}")
 
 
 def fetch_encode(data_dir):
@@ -382,8 +388,10 @@ def cmd_fetch(args):
     --data-dir are kept; files without a stable URL are only checked (resources.MANUAL)."""
     for key in resources.URLS:
         resources.fetch(key, args.data_dir)
-    for s, p in COEXPRESSION_PROJECTS:
+    for s, p in tcga_gtex_projects(args.data_dir):
         resources.fetch(f"{s}_{p}_genes", args.data_dir, url=quant.gene_sums_url(s, p))
+    for p in hcc.COHORTS.values():
+        resources.fetch(f"sra_{p}_genes", args.data_dir, url=quant.gene_sums_url("sra", p))
     for p in chronic.COHORTS.values():
         resources.fetch(f"sra_{p}_genes", args.data_dir, url=quant.gene_sums_url("sra", p))
         resources.fetch(f"sra_{p}_qc", args.data_dir, url=quant._metadata_url("sra", p, "recount_qc"))
@@ -426,21 +434,21 @@ def cmd_encode(args):
     print(f"chromatin: active TSS {(res['chrom_active'] > 0).sum()}, enhancer-like {(res['enhancer_score'] > 0).sum()}")
 
 
-COEXPRESSION_PROJECTS = (("tcga", "LIHC"), ("gtex", "LIVER"))
+COEXPRESSION_PROJECTS = (("tcga", "LIHC"), ("gtex", "LIVER"))   # samples of the M3 co-expression
 
 
 def neighbour_coexpression(args, loci_tx, gencode):
     """M3 co-expression of each quantifiable locus with its nearest protein-coding gene (TCGA-LIHC, GTEx liver)."""
-    ncov, expr, samples, feats = load_expression(args.out_dir, args.pseudocount)
+    _, expr, samples, feats, sf = tcga_gtex_expression(args.out_dir, args.pseudocount)
     samples = samples[[(s, p) in COEXPRESSION_PROJECTS for s, p in zip(samples["source"], samples["project"])]]
     genes = pd.concat([quant.read_gene_sums(resources.fetch(f"{s}_{p}_genes", args.data_dir,
                                                             url=quant.gene_sums_url(s, p)), s, samples)
                        for s, p in COEXPRESSION_PROJECTS], axis=1)
+    genes = expression.scaled(genes, sf)
     pc = gencode[gencode["gene_type"] == "protein_coding"].assign(gene_id=lambda d: d["gene_id"].str.split(".").str[0])
     pc_tss = mechanism.gene_spans(pc, "gene_id")
     loci_tss = mechanism.gene_spans(loci_tx, "gene_id")
-    quantifiable = feats.index[feats["quantifiable"].astype(bool)]
-    loci_tss = loci_tss[loci_tss.index.isin(quantifiable)]
+    loci_tss = loci_tss[loci_tss.index.isin(expression.quantifiable(feats))]
     neighbours = mechanism.nearest_coding(loci_tss, pc_tss)
     null_pairs = mechanism.nearest_coding(pc_tss, pc_tss, exclude_self=True)
     cols = list(samples["sample_id"])
@@ -449,15 +457,15 @@ def neighbour_coexpression(args, loci_tx, gencode):
 
 def cmd_mechanism(args):
     orfs = inputs.load(args.results_dir, args.candidates)
-    qct = pd.read_csv(os.path.join(args.out_dir, "qc.orfs.tsv"), sep="\t").set_index("orf_id").reindex(orfs["orf_id"])
-    qct.index = orfs.index
+    orf_qc = pd.read_csv(os.path.join(args.out_dir, "qc.orfs.tsv"), sep="\t").set_index("orf_id").reindex(orfs["orf_id"])
+    orf_qc.index = orfs.index
     peptides = pd.read_csv(os.path.join(args.out_dir, "peptides.orfs.tsv"), sep="\t", index_col=0)
     tx_exons = quant.read_gtf_exons(os.path.join(args.results_dir, "lincRNAs", "lincRNA_transcripts.gtf"))
     loci_tx = pd.read_csv(os.path.join(args.results_dir, "lincRNAs", "lincRNA_transcripts.tsv"), sep="\t")
     gencode = quant.read_gtf_exons(resources.fetch("gencode_gtf", args.data_dir))
     coexpr = neighbour_coexpression(args, loci_tx, gencode)
     coexpr.to_csv(os.path.join(args.out_dir, "coexpression.loci.tsv"), sep="\t", index_label="feature_id")
-    feats = mechanism.features(orfs, qct, peptides, mechanism.stop_to_last_junction(orfs, tx_exons),
+    feats = mechanism.features(orfs, orf_qc, peptides, mechanism.stop_to_last_junction(orfs, tx_exons),
                                mechanism.neighbour_position(loci_tx, gencode),
                                mechanism.small_rna_hosts(loci_tx, mechanism.small_rna_genes(
                                    gencode, resources.read_wgrna(args.data_dir))),
@@ -478,57 +486,25 @@ def cmd_mechanism(args):
     print("dominant class, candidates:", out.loc[out["is_candidate"], "dominant_class"].value_counts().to_dict())
 
 
-def read_sums(quant_dir):
-    """Coverage sums of quant/sums/ joined with those of features quantified later (quant/sums_*/), by sample."""
-    parts = []
-    for sd in sorted(glob.glob(os.path.join(quant_dir, "sums*"))):
-        files = sorted(glob.glob(os.path.join(sd, "sums.*.tsv")))
-        if files:
-            parts.append(pd.concat([pd.read_csv(f, sep="\t") for f in files]).drop_duplicates("sample_id")
-                         .set_index("sample_id"))
-    sums = parts[0]
-    for extra in parts[1:]:
-        sums = sums.join(extra[extra.columns.difference(sums.columns)], how="left")
-    return sums.reset_index()
-
-
-def quantifiable(feats):
-    """Features measurable in unstranded public RNA-seq (Step 2); the others are not tested."""
-    return feats.index[feats["quantifiable"].fillna(False).astype(bool)]
-
-
-def load_expression(out_dir, pseudocount):
-    d = os.path.join(out_dir, "quant")
-    sums = read_sums(d)
-    feats = pd.read_csv(os.path.join(d, "features.tsv"), sep="\t", index_col=0)
-    samples = pd.read_csv(os.path.join(d, "samples.tsv"), sep="\t", low_memory=False)
-    samples = samples[samples["sample_id"].isin(sums["sample_id"])]
-    ncov = quant.normalize(sums, feats, samples)
-    return ncov, disease.log_expr(ncov, pseudocount), samples, feats
-
-
 def cmd_disease(args):
     orfs = inputs.load(args.results_dir, args.candidates)
     loci = inputs.loci(orfs)
-    ncov, expr, samples, feats = load_expression(args.out_dir, args.pseudocount)
+    ncov, expr, samples, feats, sf = tcga_gtex_expression(args.out_dir, args.pseudocount)
     print(samples.groupby(["source", "project"]).size().to_string())
     cdr = pd.read_excel(resources.fetch("tcga_cdr", args.data_dir), sheet_name=0)
 
-    q = expr.index.isin(quantifiable(feats))
+    q = expr.index.isin(expression.quantifiable(feats))
     d1 = disease.d1_hcc(expr.loc[q], samples)
-    d2 = disease.d2_survival(expr.loc[q], samples, cdr, ncov=ncov.loc[q])
+    d2 = disease.d2_survival(expr.loc[q], samples, cdr, ncov=ncov.loc[q], size_factors=sf)
     cell = loci[["log2TPM_HepG2", "log2TPM_Huh7"]].astype(float).max(axis=1)
     d6 = integrate.liver_context(expr, samples, cell)
     d4 = pd.read_csv(os.path.join(args.out_dir, "D4.gwas.tsv"), sep="\t", index_col=0)
     d5 = pd.read_csv(os.path.join(args.out_dir, "D5.literature.tsv"), sep="\t", index_col=0)
     d3 = pd.read_csv(os.path.join(args.out_dir, "D3.somatic.tsv"), sep="\t", index_col=0)
-    d4q = pd.read_csv(os.path.join(args.out_dir, "D4.eqtl.tsv"), sep="\t", index_col=0)
-    d4q["D4_eqtl_supported"] = d4q["eqtl_gwas_mlog10p"] > 0
-    rep = pd.read_csv(os.path.join(args.out_dir, "D1.hcc_replication.tsv"), sep="\t", index_col=0)
-    # replicated: same direction as D1 HCC and combined FDR < 0.05 in the independent cohorts (reported, not scored);
-    # missing where no replication cohort tested the feature
-    rep["hcc_replicated"] = ((np.sign(rep["hcc_rep_r"]) == np.sign(d1["D1_HCC"].reindex(rep.index)))
-                             & (rep["hcc_rep_fdr"] < 0.05)).astype(object).where(rep["hcc_rep_fdr"].notna())
+    eqtl_table = pd.read_csv(os.path.join(args.out_dir, "D4.eqtl.tsv"), sep="\t", index_col=0)
+    eqtl_table["D4_eqtl_supported"] = eqtl_table["eqtl_gwas_mlog10p"] > 0
+    replication = pd.read_csv(os.path.join(args.out_dir, "D1.hcc_replication.tsv"), sep="\t", index_col=0)
+    replication["hcc_replicated"] = hcc.replicated(replication, d1["D1_HCC"])
 
     stats = pd.DataFrame(index=feats.index)
     stats["D1_HCC"] = d1["D1_HCC"]
@@ -544,16 +520,16 @@ def cmd_disease(args):
         stats[c] = d5[c]
     stats = stats.join(d6)
     # loci that cannot be measured in unstranded public RNA-seq have no expression-based components
-    unq = ~feats["quantifiable"].reindex(stats.index).fillna(False).astype(bool)
-    stats.loc[unq, ["D1_HCC", "D1_chronic", "D2", "gtex_liver_median", "liver_specificity"]] = float("nan")
+    not_quantifiable = ~feats["quantifiable"].reindex(stats.index).fillna(False).astype(bool)
+    stats.loc[not_quantifiable, ["D1_HCC", "D1_chronic", "D2", "gtex_liver_median", "liver_specificity"]] = float("nan")
     is_bg = pd.Series(stats.index.isin(loci.index), index=stats.index)
     score = integrate.disease_score(stats, is_bg)
 
     tum_spec = integrate.tumour_specificity(expr, samples)
-    tum_spec[unq.reindex(tum_spec.index).fillna(False)] = float("nan")
+    tum_spec[not_quantifiable.reindex(tum_spec.index).fillna(False).astype(bool)] = float("nan")
     out = pd.concat([stats.add_prefix("stat_"), score, d1.drop(columns="D1_HCC"), d1c.drop(columns="D1_chronic"),
-                     rep, d2.drop(columns="D2"),
-                     d3.drop(columns="D3"), d4.drop(columns=["D4", "D4_hcc", "D4_chronic"]), d4q,
+                     replication, d2.drop(columns="D2"),
+                     d3.drop(columns="D3"), d4.drop(columns=["D4", "D4_hcc", "D4_chronic"]), eqtl_table,
                      d5.drop(columns=["D5", "D5_hcc", "D5_chronic", "symbol"]),
                      tum_spec.rename("tumour_specificity")], axis=1)
     out.insert(0, "symbol", loci["locus_name"].reindex(out.index).fillna(out.index.to_series().str.replace("ctrl:", "")))
@@ -581,7 +557,7 @@ def cmd_weights(args):
 def cmd_report(args):
     orfs = inputs.load(args.results_dir, args.candidates)
     read = lambda name, **kw: pd.read_csv(os.path.join(args.out_dir, name), sep="\t", **kw)
-    qct = read("qc.orfs.tsv").set_index("orf_id").reindex(orfs["orf_id"]).set_axis(orfs.index)
+    orf_qc = read("qc.orfs.tsv").set_index("orf_id").reindex(orfs["orf_id"]).set_axis(orfs.index)
     mech = read("mechanism.orfs.tsv").set_index("orf_id").reindex(orfs["orf_id"]).set_axis(orfs.index)
     dis = read("disease.loci.tsv", index_col=0)
     if os.path.exists(os.path.join(args.out_dir, "disease_score_fitted.tsv")):
@@ -589,7 +565,7 @@ def cmd_report(args):
             read("disease_score_fitted.tsv", index_col=0))
     peptides = read("peptides.orfs.tsv", index_col=0)
     act = report.actionability(orfs, dis, peptides, read("hla.orfs.tsv", index_col=0))
-    table = report.orf_table(orfs, qct, dis, mech, act)
+    table = report.orf_table(orfs, orf_qc, dis, mech, act)
     table.to_csv(os.path.join(args.out_dir, "lincdisease.orfs.tsv"), sep="\t", index=False)
     cand = table[table["is_candidate"]].sort_values(["disease_score", "priority_score"], ascending=False)
     cand.to_csv(os.path.join(args.out_dir, "lincdisease.candidates.tsv"), sep="\t", index=False)
@@ -673,12 +649,17 @@ def main():
                                                        "features; joined to quant/sums/ by sample)")
     s.set_defaults(func=cmd_quant)
 
+    sc = sub.add_parser("scaling", help="Step 2: size factors of the TCGA-LIHC / GTEx samples (recount3 gene sums)")
+    sc.add_argument("--data-dir", required=True)
+    sc.set_defaults(func=cmd_scaling)
+
     ch = sub.add_parser("chronic", help="Step 3, D1 chronic liver disease (SRA cohorts in quant_sra/)")
     ch.add_argument("--manifest", action="store_true", help="write quant_sra/samples.tsv (needs network)")
     ch.add_argument("--pseudocount", type=float, default=0.05)
     ch.add_argument("--data-dir", help="download cache (recount3 gene sums and QC, GENCODE); not needed with --manifest")
-    ch.add_argument("--govaere-dir", help="Govaere directory (locus_cov/, counts/, star_logs/); its finished runs "
-                                          "enter as the cohort 'govaere'")
+    ch.add_argument("--govaere-dir", help="Govaere directory (locus_cov/, counts/, star_logs/); its runs enter as "
+                                          "the cohort 'govaere'")
+    ch.add_argument("--govaere-exclude", nargs="*", default=[], help="Govaere runs left out (config govaere.exclude)")
     ch.add_argument("--govaere-runs", help="ENA run table of the Govaere runs")
     ch.add_argument("--govaere-soft", help="GEO sample annotation of GSE135251 (acc.cgi text format)")
     ch.set_defaults(func=cmd_chronic)
@@ -692,6 +673,7 @@ def main():
     hc = sub.add_parser("hcc", help="Step 3, D1 HCC replication in independent cohorts (quant_hcc/)")
     hc.add_argument("--manifest", action="store_true", help="write quant_hcc/samples.tsv (needs network)")
     hc.add_argument("--pseudocount", type=float, default=0.05)
+    hc.add_argument("--data-dir", help="download cache (recount3 gene sums, GENCODE); not needed with --manifest")
     hc.set_defaults(func=cmd_hcc)
 
     lt = sub.add_parser("literature", help="Step 3, D5: Europe PMC counts")
@@ -704,7 +686,7 @@ def main():
     gw.add_argument("--flank", type=int, default=50_000)
     gw.set_defaults(func=cmd_genetics)
 
-    so = sub.add_parser("somatic", help="Step 3, D3: copy number and promoter methylation in TCGA-LIHC")
+    so = sub.add_parser("somatic", help="Step 3, D3: somatic copy number in TCGA-LIHC")
     _common(so)
     so.add_argument("--pseudocount", type=float, default=0.05, help="added to ncov before log2")
     so.set_defaults(func=cmd_somatic)
@@ -723,7 +705,7 @@ def main():
     ds.add_argument("--pseudocount", type=float, default=0.05, help="added to ncov before log2")
     ds.set_defaults(func=cmd_disease)
 
-    wt = sub.add_parser("weights", help="Optional: fitted disease-score weights (alternative score)")
+    wt = sub.add_parser("weights", help="Fitted disease-score weights (alternative score, reported)")
     _common(wt)
     wt.add_argument("--min-papers", type=int, default=weights.MIN_PAPERS,
                     help="liver papers (non-retracted) for an established liver-disease lncRNA")

@@ -1,18 +1,20 @@
 """
-Disease components (LOGIC.md, Step 3) from the recount3 quantification (quant.normalize: features x samples).
+Disease components (LOGIC.md, Step 3) from the recount3 quantification of TCGA-LIHC and GTEx (features x samples,
+ncov scaled by the size factors of expression.py).
 
 Expression is log2(ncov + pseudocount). Effect sizes are rank-based, so they are comparable between loci with
 very different expression levels and robust to the many zeros of lowly expressed lincRNAs:
 
-D1 HCC   rank-biserial correlation r (-1..1) of
-           paired   TCGA-LIHC primary tumour vs adjacent normal of the same patient (matched-pairs, from the
-                    Wilcoxon signed-rank test)
-           GTEx     TCGA-LIHC primary tumours vs GTEx liver (Mann-Whitney; AUC = (r + 1) / 2)
-         statistic D1_HCC = mean of the two r (signed: > 0 up in tumour); p-values BH-adjusted over features.
+D1 HCC   matched-pairs rank-biserial correlation r (-1..1) of TCGA-LIHC primary tumour vs adjacent normal of the
+         same patient, from the Wilcoxon signed-rank test (signed: > 0 up in tumour); p-values BH-adjusted over
+         features. Reported, not scored: tumours vs GTEx liver (Mann-Whitney r; AUC = (r + 1) / 2), as TCGA adjacent
+         normals and GTEx liver, both non-tumour liver, already differ for most loci (study batch).
 D2       Cox proportional hazards of overall survival (OS) and progression-free interval (PFI) (TCGA-CDR
-         endpoints) on standardized expression, adjusted for age and stage (I-II vs III-IV), one primary tumour
-         per patient; features expressed (ncov > 0) in < `min_expressed` of tumours are not tested.
-         statistic D2 = mean of the Wald z of OS and PFI (signed: > 0 = high expression, worse outcome).
+         endpoints) on standardized expression, adjusted for age, stage (I-II vs III-IV) and the log size factor
+         of the tumour (the loss of hepatocyte transcripts in less differentiated tumours, which itself predicts
+         survival), one primary tumour per patient; features expressed (ncov > 0) in < `min_expressed` of tumours
+         are not tested. statistic D2 = mean of the Wald z of OS and PFI (signed: > 0 = high expression, worse
+         outcome).
 """
 import numpy as np
 import pandas as pd
@@ -81,7 +83,7 @@ def d1_hcc(expr, samples):
     out["n_pairs"] = len(pairs)
     out["n_tumour"] = len(tum)
     out["n_gtex_liver"] = len(liver)
-    out["D1_HCC"] = out[["r_paired", "r_vs_gtex"]].mean(axis=1)
+    out["D1_HCC"] = out["r_paired"]
     return out
 
 
@@ -89,8 +91,9 @@ STAGE_LATE = ("Stage III", "Stage IIIA", "Stage IIIB", "Stage IIIC", "Stage IV",
 STAGE_EARLY = ("Stage I", "Stage II")
 
 
-def survival_table(samples, cdr):
-    """Primary tumours with OS/PFI endpoints, age and late-stage indicator (patients without stage dropped)."""
+def survival_table(samples, cdr, size_factors):
+    """Primary tumours with OS/PFI endpoints, age, late-stage indicator and log size factor (patients without stage
+    dropped)."""
     tum, _, _ = tcga_groups(samples)
     c = cdr[cdr["type"] == "LIHC"].copy()
     c = c[c["ajcc_pathologic_tumor_stage"].isin(STAGE_LATE + STAGE_EARLY)]
@@ -99,12 +102,16 @@ def survival_table(samples, cdr):
     for col in ("OS", "OS.time", "PFI", "PFI.time"):
         c[col] = pd.to_numeric(c[col], errors="coerce")
     t = tum.merge(c, left_on="patient", right_on="bcr_patient_barcode")
-    return t.dropna(subset=["age"])
+    t["log_sf"] = np.log(t["sample_id"].map(size_factors))
+    return t.dropna(subset=["age", "log_sf"])
+
+
+COVARIATES = ["age", "late_stage", "log_sf"]
 
 
 def _cox(df, endpoint):
     from lifelines import CoxPHFitter
-    d = df[["x", "age", "late_stage", endpoint, f"{endpoint}.time"]].dropna()
+    d = df[["x", *COVARIATES, endpoint, f"{endpoint}.time"]].dropna()
     d = d[d[f"{endpoint}.time"] > 0]
     cph = CoxPHFitter(penalizer=0.0)
     cph.fit(d, duration_col=f"{endpoint}.time", event_col=endpoint)
@@ -112,9 +119,11 @@ def _cox(df, endpoint):
     return s["exp(coef)"], s["z"], s["p"], len(d)
 
 
-def d2_survival(expr, samples, cdr, min_expressed=0.2, ncov=None):
-    """Cox models per feature; `ncov` (linear scale) decides which features are expressed enough to test."""
-    tab = survival_table(samples, cdr)
+def d2_survival(expr, samples, cdr, size_factors, min_expressed=0.2, ncov=None):
+    """Cox models per feature; `ncov` (linear scale) decides which features are expressed enough to test;
+    `size_factors`: by sample_id. A model that does not converge leaves its columns missing (fit_error says why)."""
+    from lifelines.exceptions import ConvergenceError
+    tab = survival_table(samples, cdr, size_factors)
     e = expr[tab["sample_id"]]
     expressed = (ncov[tab["sample_id"]] > 0).mean(axis=1) if ncov is not None else pd.Series(1.0, index=e.index)
     rows = []
@@ -122,12 +131,12 @@ def d2_survival(expr, samples, cdr, min_expressed=0.2, ncov=None):
         rec = {"feature_id": fid, "frac_tumours_expressed": expressed[fid]}
         x = e.loc[fid].to_numpy()
         if expressed[fid] >= min_expressed and np.std(x) > 0:
-            df = tab[["age", "late_stage", "OS", "OS.time", "PFI", "PFI.time"]].assign(x=(x - x.mean()) / x.std())
+            df = tab[[*COVARIATES, "OS", "OS.time", "PFI", "PFI.time"]].assign(x=(x - x.mean()) / x.std())
             for ep in ("OS", "PFI"):
                 try:
                     rec[f"HR_{ep}"], rec[f"z_{ep}"], rec[f"p_{ep}"], rec[f"n_{ep}"] = _cox(df, ep)
-                except Exception:          # non-convergence: leave missing
-                    pass
+                except (ConvergenceError, np.linalg.LinAlgError) as exc:
+                    rec[f"fit_error_{ep}"] = type(exc).__name__
         rows.append(rec)
     out = pd.DataFrame(rows).set_index("feature_id")
     for ep in ("OS", "PFI"):

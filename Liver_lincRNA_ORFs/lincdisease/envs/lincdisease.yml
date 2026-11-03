@@ -1,3 +1,5 @@
+# Environment of the lincdisease package, its tests and the notebook. Versions of the v2 results; the exact build
+# is in lincdisease.lock.txt (mamba create -p <prefix> --file lincdisease.lock.txt).
 name: lincdisease
 channels:
   - conda-forge
@@ -5,15 +7,15 @@ channels:
   - nodefaults
 dependencies:
   - python=3.11
-  - numpy
-  - pandas>=2.0
-  - scipy
-  - statsmodels
-  - scikit-learn
-  - lifelines
-  - matplotlib
-  - pybigwig
-  - pysam
+  - numpy=2.4
+  - pandas=3.1
+  - scipy=1.17
+  - statsmodels=0.15
+  - scikit-learn=1.9
+  - lifelines=0.30
+  - matplotlib=3.11
+  - pybigwig=0.3.26
+  - pysam=0.24
   - requests
   - openpyxl
   - pytest
@@ -22,5 +24,5 @@ dependencies:
   - nbformat
   - nbconvert
   - pyyaml           # notebook reads config/config.yaml
-  - bedtools
-  - diamond
+  - bedtools=2.31
+  - diamond=2.2.8

@@ -6,10 +6,12 @@ counts once), class scores, rank-based standardized class scores and dominant cl
 Features computed here (higher = more support for the class; '-' marks features ranked on the negated value):
   M1  translation (pooled log10 Bayes factor), fraction of the transcript's P-sites in the ORF, specific
       peptides (proteomics peptides absent from canonical proteins + lincORF-specific HLA-I peptides),
-      PhyloCSF and ORF vs non-ORF exon PhyloP contrast, both weighted by copy-attribution confidence, ORF
-      length, hits of published CRISPR screens (screens.py)
-  M2  NMD substrate (stop codon > 50 nt upstream of the last exon junction), NMD sensitivity (up-regulation upon
-      UPF1 or SMG6 + SMG7 knock-down in HeLa, nmd.py)
+      PhyloCSF and ORF vs non-ORF exon PhyloP contrast, both weighted by copy-attribution confidence, sequence
+      features (peptide.py), hits of published CRISPR screens (screens.py). The features that rise with ORF length
+      (LENGTH_DEPENDENT) are ranked among ORFs of similar length (LENGTH_BINS quantile bins of the background), so
+      that M1 does not reward length as such.
+  M2  NMD substrate (stop codon > NMD_STOP_DISTANCE nt upstream of the last exon junction), NMD sensitivity (mean
+      up-regulation upon UPF1 knock-down and SMG6 + SMG7 knock-down in HeLa, nmd.py)
   M3  divergent / antisense position next to a protein-coding gene, low polysome association (-MRL percentile),
       co-expression with the nearest protein-coding gene (TSS distance <= 100 kb) across TCGA-LIHC and GTEx
       liver: Spearman rho minus the median rho of protein-coding gene pairs in the same TSS-distance bin
@@ -18,9 +20,8 @@ Features computed here (higher = more support for the class; '-' marks features 
 ENCODE HepG2 features (encode.py): nuclear enrichment (M3, M4) and its negative (M5), eCLIP by nuclear (M4) and
 cytoplasmic (M5) RBPs (eclip.py; loci expressed in HepG2, TPM >= ECLIP_MIN_TPM, without a bound RBP have
 enrichment 0, i.e. no evidence either way; loci not expressed in HepG2 are missing); M5 has no other features.
-ENCODE features,
-chromatin at the TSS, sequence features (TM, signal peptide, Pfam, disorder), PhyloP contrast and CRISPR
-screens enter as missing when their step has not been run; scoring.composite shrinks them to 0.5.
+Features of a step that has not been run (ENCODE, chromatin at the TSS, sequence features, PhyloP contrast, CRISPR
+screens) are missing; scoring.composite shrinks missing features to 0.5.
 """
 import numpy as np
 import pandas as pd
@@ -29,13 +30,21 @@ from . import quant, scoring
 
 CLASSES = {
     "M1": ["m1_translation", "m1_orf_share", "m1_peptides", "m1_independent_translation", "m1_phylocsf_weighted",
-           "m1_length", "m1_phylop_contrast_weighted", "m1_sequence_features", "m1_crispr_screen"],
+           "m1_phylop_contrast_weighted", "m1_sequence_features", "m1_crispr_screen"],
     "M2": ["m2_nmd", "m2_nmd_sensitivity"],
     "M3": ["m3_neighbour_position", "m3_low_polysome", "m3_coexpression", "m3_nuclear", "m3_enhancer_chromatin"],
     "M4": ["m4_copy_number", "m4_nuclear", "m4_eclip_nuclear"],
     "M5": ["m5_cytoplasmic", "m5_eclip_cytoplasmic"],
     "M6": ["m6_small_rna_host"],
 }
+# M1 features correlated with ORF length (Spearman 0.16-0.54 over all ORFs), ranked within length bins
+LENGTH_DEPENDENT = ("m1_translation", "m1_orf_share", "m1_sequence_features", "m1_phylocsf")
+LENGTH_BINS = 5
+# conservation features count in proportion to the copy-attribution confidence (class_table)
+CONSERVATION = ("m1_phylocsf", "m1_phylop_contrast")
+# columns of features() that are not themselves features
+NOT_FEATURES = ("copy_attribution", "orf_length")
+NMD_STOP_DISTANCE = 50   # nt between stop codon and last exon junction (the 50-55 nt rule)
 DOMINANCE_MARGIN = 0.5   # standard normal units of the rank-based standardized class scores
 ECLIP_MIN_TPM = 1.0      # loci below this HepG2 TPM cannot show eCLIP binding: eCLIP features missing
 DIVERGENT_DISTANCE = 5000
@@ -218,70 +227,118 @@ def small_rna_hosts(loci_tx, small_rnas):
 def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=None, encode=None, eclip=None,
              chromatin=None, peptide_feats=None, orf_support=None, nmd=None):
     """
-    Raw feature values per ORF (index of `orfs`). `coexpr`: locus -> co-expression excess (coexpression);
-    `encode`, `eclip`, `chromatin`, `nmd`: locus tables of encode.features, eclip.features, chromatin.features,
-    nmd.sensitivity;
-    `peptide_feats`, `orf_support`: ORF tables (index orf_id) of the `peptide` and `support` steps.
+    Raw feature values per ORF (index of `orfs`), grouped by class, plus two columns that are not features
+    (NOT_FEATURES: copy_attribution weights the conservation features, orf_length defines the length bins).
+    `stop_dist`: stop codon to last exon junction (nt, stop_to_last_junction); `position`, `small_rna`, `coexpr`:
+    per locus; `encode`, `eclip`, `chromatin`, `nmd`: locus tables of encode.features, eclip.features,
+    chromatin.features, nmd.sensitivity; `peptide_feats`, `orf_support`: ORF tables (index orf_id) of the
+    `peptide` and `support` steps. Tables that are None give missing features.
     """
     f = pd.DataFrame(index=orfs.index)
-    num = lambda c: pd.to_numeric(orfs[c], errors="coerce")
-    pep = peptides.reindex(orfs["orf_id"]).fillna(0)
-    f["m1_translation"] = num("bayes_log10BF_pooled")
-    f["m1_orf_share"] = num("frac_tx_psites_in_orf")
-    f["m1_peptides"] = (pep["n_specific_peptides"] + pep["n_hla_specific"]).to_numpy()
-    f["m1_phylocsf"] = num("PhyloCSF_Median")
+
+    def orf_col(c):                      # a column of the lincorfz ORF table
+        return pd.to_numeric(orfs[c], errors="coerce")
+
+    def per_locus(table, col):           # a locus-level value copied to the locus' ORFs
+        return orfs["locus_id"].map(table[col]).astype(float).to_numpy() if table is not None else np.nan
+
+    def per_orf(table, col):             # a column of an ORF table indexed by orf_id
+        return table.reindex(orfs["orf_id"])[col].astype(float).to_numpy()
+
+    nuclear = per_locus(encode, "nuclear_log2ratio")
     f["copy_attribution"] = qc_table["copy_attribution"].to_numpy()
-    f["m1_length"] = num("n_aa")
-    f["m2_nmd"] = (stop_dist > 50).astype(float).where(stop_dist.notna())
+    f["orf_length"] = orf_col("n_aa")
+
+    # M1 encoded peptide
+    pep = peptides.reindex(orfs["orf_id"]).fillna(0)
+    f["m1_translation"] = orf_col("bayes_log10BF_pooled")
+    f["m1_orf_share"] = orf_col("frac_tx_psites_in_orf")
+    f["m1_peptides"] = (pep["n_specific_peptides"] + pep["n_hla_specific"]).to_numpy()
+    f["m1_phylocsf"] = orf_col("PhyloCSF_Median")
+    if peptide_feats is not None:
+        f["m1_independent_translation"] = (per_orf(peptide_feats, "gencode_riboseq_orf")
+                                           + per_orf(peptide_feats, "gencode_riboseq_peptide_support"))
+        structured = ((per_orf(peptide_feats, "pep_tm_segments") > 0) | (per_orf(peptide_feats, "pep_signal_like") > 0)
+                      | (per_orf(peptide_feats, "pfam_n_domains") > 0))
+        f["m1_sequence_features"] = 0.5 * structured + 0.5 * (1 - per_orf(peptide_feats, "pep_frac_disordered"))
+    if orf_support is not None:
+        f["m1_phylop_contrast"] = per_orf(orf_support, "phylop_orf_minus_nonorf")
+        f["m1_crispr_screen"] = per_orf(orf_support, "crispr_screen_value")
+
+    # M2 translation-coupled RNA regulation
+    f["m2_nmd"] = (stop_dist > NMD_STOP_DISTANCE).astype(float).where(stop_dist.notna())
+    f["m2_nmd_sensitivity"] = per_locus(nmd, "nmd_log2fc")
+
+    # M3 cis regulation
     f["m3_neighbour_position"] = orfs["locus_id"].map(position).to_numpy()
-    f["m3_low_polysome"] = -num("MRL_pct_vs_mRNA")
+    f["m3_low_polysome"] = -orf_col("MRL_pct_vs_mRNA")
     f["m3_coexpression"] = orfs["locus_id"].map(coexpr).to_numpy() if coexpr is not None else np.nan
-    enc = encode if encode is not None else pd.DataFrame(columns=["nuclear_log2ratio"])
-    nuclear = orfs["locus_id"].map(enc["nuclear_log2ratio"]).astype(float).to_numpy()
     f["m3_nuclear"] = nuclear
-    f["m4_copy_number"] = num("log2TPM_HepG2")
+    f["m3_enhancer_chromatin"] = per_locus(chromatin, "enhancer_score")
+
+    # M4 nuclear trans, M5 cytoplasmic trans
+    f["m4_copy_number"] = orf_col("log2TPM_HepG2")
     f["m4_nuclear"] = nuclear
     f["m5_cytoplasmic"] = -nuclear
-    f["m6_small_rna_host"] = orfs["locus_id"].map(small_rna).to_numpy()
-    locus = lambda table, col: (orfs["locus_id"].map(table[col]).astype(float).to_numpy() if table is not None
-                                else np.nan)
-    f["m3_enhancer_chromatin"] = locus(chromatin, "enhancer_score")
     # eclip.features leaves loci without a bound RBP missing; for loci expressed in HepG2 that is an observation
     # (no RBP bound: enrichment 0 by its formula), for the others there is nothing to observe
-    expressed = (2 ** num("log2TPM_HepG2") >= ECLIP_MIN_TPM).to_numpy()
+    expressed = (2 ** orf_col("log2TPM_HepG2") >= ECLIP_MIN_TPM).to_numpy()
     for feat, col in (("m4_eclip_nuclear", "eclip_nuclear_enrichment"),
                       ("m5_eclip_cytoplasmic", "eclip_cytoplasmic_enrichment")):
-        v = locus(eclip, col)
-        f[feat] = np.where(expressed, np.nan_to_num(v, nan=0.0), np.nan) if eclip is not None else np.nan
-    f["m2_nmd_sensitivity"] = locus(nmd, "nmd_log2fc")
-    if peptide_feats is not None:
-        pf = peptide_feats.reindex(orfs["orf_id"])
-        col = lambda c: pf[c].astype(float).to_numpy()
-        f["m1_independent_translation"] = col("gencode_riboseq_orf") + col("gencode_riboseq_peptide_support")
-        structured = (col("pep_tm_segments") > 0) | (col("pep_signal_like") > 0) | (col("pfam_n_domains") > 0)
-        f["m1_sequence_features"] = 0.5 * structured + 0.5 * (1 - col("pep_frac_disordered"))
-    if orf_support is not None:
-        sup = orf_support.reindex(orfs["orf_id"])
-        f["m1_phylop_contrast"] = sup["phylop_orf_minus_nonorf"].astype(float).to_numpy()
-        f["m1_crispr_screen"] = sup["crispr_screen_value"].astype(float).to_numpy()
+        f[feat] = np.where(expressed, np.nan_to_num(per_locus(eclip, col), nan=0.0), np.nan) if eclip is not None \
+            else np.nan
+
+    # M6 small-RNA host
+    f["m6_small_rna_host"] = orfs["locus_id"].map(small_rna).to_numpy()
     return f
 
 
+def length_bins(length, is_background, n_bins=LENGTH_BINS):
+    """Bin index (0..n_bins-1) of each ORF length, bins at the quantiles of the background lengths."""
+    length = np.asarray(length, dtype=float)
+    edges = np.quantile(length[np.asarray(is_background, dtype=bool)], np.linspace(0, 1, n_bins + 1)[1:-1])
+    return np.searchsorted(edges, length, side="right")
+
+
+def percentile_within_bins(values, bins, is_background, weights):
+    """Percentile of each value among the background values of the same bin (scoring.percentile_vs_background)."""
+    v = np.asarray(values, dtype=float)
+    out = np.full(len(v), np.nan)
+    for b in np.unique(bins):
+        m = bins == b
+        ref = m & is_background
+        out[m] = scoring.percentile_vs_background(v[m], v[ref], weights[ref])
+    return out
+
+
 def class_table(feats, is_background, locus_ids, margin=DOMINANCE_MARGIN):
-    """Percentiles, class scores, coverage, standardized class scores (_z) and dominant class. Background ORFs are
-    weighted by 1 / number of ORFs of their locus (`locus_ids`), as locus-level features are copied to every ORF."""
+    """
+    Percentiles, class scores, coverage, standardized class scores (_z) and dominant class. Background ORFs are
+    weighted by 1 / number of ORFs of their locus (`locus_ids`), as locus-level features are copied to every ORF.
+    LENGTH_DEPENDENT features are ranked within ORF-length bins; the CONSERVATION features are reported as
+    pct_<feature>_weighted, pulled toward 0.5 in proportion to 1 - copy-attribution confidence.
+    """
     bg = np.asarray(is_background, dtype=bool)
     w = scoring.locus_weights(locus_ids)
-    conservation = [c for c in ("m1_phylocsf", "m1_phylop_contrast") if c in feats.columns]
-    cols = [c for c in feats.columns if c != "copy_attribution" and c not in conservation]
-    pct = scoring.component_percentiles(feats, feats[bg], cols, weights=w[bg])
-    # conservation counts in proportion to the confidence that the alignment belongs to this copy
-    for c in conservation:
-        p_cons = scoring.percentile_vs_background(feats[c], feats.loc[bg, c], w[bg])
-        pct[f"{c}_weighted"] = 0.5 + (p_cons - 0.5) * feats["copy_attribution"].to_numpy()
+    bins = length_bins(feats["orf_length"], bg)
+
+    def percentile(c):
+        if c in LENGTH_DEPENDENT:
+            return percentile_within_bins(feats[c], bins, bg, w)
+        return scoring.percentile_vs_background(feats[c], feats.loc[bg, c], w[bg])
+
+    pct = pd.DataFrame(index=feats.index)
+    for c in feats.columns:
+        if c in NOT_FEATURES:
+            continue
+        if c in CONSERVATION:
+            pct[f"{c}_weighted"] = 0.5 + (percentile(c) - 0.5) * feats["copy_attribution"].to_numpy()
+        else:
+            pct[c] = percentile(c)
     scores, coverage = scoring.class_scores(pct, CLASSES)
     z = scoring.standardized(scores, bg, coverage, w)
     out = pd.concat([pct.add_prefix("pct_"), scores.add_suffix("_score"), coverage.add_suffix("_coverage"),
                      z.add_suffix("_z")], axis=1)
+    out["length_bin"] = bins
     out["dominant_class"] = scoring.dominant_class(z, margin)
     return out

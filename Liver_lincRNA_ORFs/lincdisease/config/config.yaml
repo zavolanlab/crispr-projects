@@ -28,3 +28,5 @@ govaere:
   reference: lincdisease_data/reference
   max_fastq_gb: 60                         # downloads wait while this much FASTQ is on disk
   modules: STAR/2.7.11b-GCC-13.3.0 SAMtools/1.21-GCC-13.3.0
+  exclude:                                 # runs left out of D1 chronic
+    - SRR9882963                           # read 2 FASTQ corrupt at ENA (md5 mismatch on every download)

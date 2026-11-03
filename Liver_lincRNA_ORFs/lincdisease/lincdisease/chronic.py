@@ -11,10 +11,8 @@ Cohorts (phenotypes from the recount3 SRA `sample_attributes`):
           regions (samtools bedcov), gene counts and technical covariates from STAR (exonic fraction = reads
           assigned to genes / uniquely mapped reads)
 
-Sample scaling: `ncov` is divided by the total base coverage (AUC), which lets the hepatocyte transcripts that
-dominate liver RNA set the scale; their share falls with injury and lifts everything else. ncov is therefore divided
-by median-of-ratios size factors of the recount3 gene sums (expressed protein-coding genes, top 1% by abundance
-left out), relative to the AUC scaling.
+Sample scaling: `ncov` is divided by median-of-ratios size factors of the recount3 gene sums, per cohort
+(expression.py; hepatocyte transcripts, which dominate liver RNA, lose their share with injury).
 
 Per cohort, a signed partial rank correlation in [-1, 1] of log2(scaled ncov + pseudocount) with the phenotype
 (> 0 = higher with disease): fibrosis stage (hoang, govaere; NAS reported), NAFL + NASH vs normal-weight + obese (suppli),
@@ -38,16 +36,18 @@ from scipy import stats
 
 from . import quant
 from .disease import bh
+from .expression import size_factors
 
-COHORTS = {"hoang": "SRP197353", "suppli": "SRP186450", "hcv": "SRP078450"}
-# Suppli is reported, not scored: its cases differ technically from its controls (fewer uniquely mapped reads,
-# lower exonic fraction; the 15 samples with the lowest exonic fraction are all cases), and after scaling and
-# covariate adjustment 40% of loci still have p < 0.01 with a median r of +0.14 (Hoang: 9%, 0.00)
-# the fibrosis cohorts share FIBROSIS_WEIGHT in proportion to the samples tested (per feature)
+COHORTS = {"hoang": "SRP197353", "suppli": "SRP186450", "hcv": "SRP078450"}    # recount3 projects
+ALL_COHORTS = [*COHORTS, "govaere"]
+# Cohort weights of D1_chronic (cohort_weights). The fibrosis cohorts share FIBROSIS_WEIGHT, per feature in
+# proportion to the samples tested; the other cohorts have fixed weights (WEIGHTS). Suppli has weight 0 (reported,
+# not scored): its cases differ technically from its controls (fewer uniquely mapped reads, lower exonic fraction;
+# the 15 samples with the lowest exonic fraction are all cases), and after scaling and covariate adjustment 40% of
+# loci still have p < 0.01 with a median r of +0.14 (Hoang: 9%, 0.00).
 FIBROSIS_COHORTS = ("hoang", "govaere")
 FIBROSIS_WEIGHT = 2 / 3
 WEIGHTS = {"suppli": 0.0, "hcv": 1 / 3}
-ALL_COHORTS = [*COHORTS, "govaere"]    # COHORTS: recount3 projects
 MIN_DETECTED = 0.2      # features detected (ncov > 0) in fewer samples of a cohort are not tested
 TECHNICAL = ["log_input_reads", "pct_unique", "exonic_fraction"]
 # liver cell-type markers (MacParland et al. 2018 liver atlas); COL1A1 left out, as it is the D1 chronic control,
@@ -110,12 +110,8 @@ def manifest():
 
 
 
-def govaere(gov_dir, runs_tsv, soft):
-    """
-    Finished Govaere runs (locus_cov/<run>.tsv present) -> ncov (features x samples), STAR gene counts (unversioned
-    gene id x samples; column 4, reverse-stranded library), QC rows in recount_qc column names, phenotypes.
-    Sample ids 'govaere:<run>'. `soft`: GEO sample annotation (acc.cgi text format) with the sample characteristics.
-    """
+def read_soft(soft):
+    """GEO sample annotation (acc.cgi text format) -> one row per GSM with its sample characteristics as columns."""
     rec, cur = [], None
     for line in open(soft):
         if line.startswith("^SAMPLE"):
@@ -124,12 +120,36 @@ def govaere(gov_dir, runs_tsv, soft):
         elif line.startswith("!Sample_characteristics_ch1") and cur is not None:
             k, _, v = line.split("=", 1)[1].strip().partition(": ")
             cur[k] = v
-    meta = pd.DataFrame(rec)
+    return pd.DataFrame(rec)
+
+
+def govaere_samples(runs_tsv, soft):
+    """Govaere runs (index run accession) with their GEO sample characteristics."""
     runs = pd.read_csv(runs_tsv, sep="\t")[["run_accession", "experiment_alias"]]
-    meta = runs.merge(meta, left_on="experiment_alias", right_on="gsm").set_index("run_accession")
-    done = [r for r in meta.index if os.path.exists(os.path.join(gov_dir, "locus_cov", f"{r}.tsv"))]
+    return runs.merge(read_soft(soft), left_on="experiment_alias", right_on="gsm").set_index("run_accession")
+
+
+def govaere(gov_dir, runs_tsv, soft, regions, exclude=()):
+    """
+    Govaere runs of the run table except `exclude` -> ncov (features x samples), STAR gene counts (unversioned
+    gene id x samples; column 4, reverse-stranded library), QC rows in recount_qc column names, phenotypes.
+    Sample ids 'govaere:<run>'. `soft`: GEO sample annotation with the sample characteristics. Raises if a run has
+    no locus coverage or the coverage was computed on regions other than `regions` (current quant/regions.tsv).
+    """
+    from .expression import changed_features
+    meta = govaere_samples(runs_tsv, soft)
+    done = [r for r in meta.index if r not in set(exclude)]
+    cov_dir = os.path.join(gov_dir, "locus_cov")
+    missing = [r for r in done if not os.path.exists(os.path.join(cov_dir, f"{r}.tsv"))]
+    if missing:
+        raise ValueError(f"no locus coverage for {len(missing)} Govaere runs ({missing[:3]})")
+    saved = os.path.join(cov_dir, "regions.tsv")
+    if not os.path.exists(saved) or changed_features(pd.read_csv(saved, sep="\t"), regions):
+        raise ValueError(f"{cov_dir} was computed on other regions than quant/regions.tsv; delete it to recompute")
     ids = ["govaere:" + r for r in done]
-    ncov = pd.concat([pd.read_csv(os.path.join(gov_dir, "locus_cov", f"{r}.tsv"), sep="\t", index_col=0)["ncov"]
+    # summed per-base depth over the regions of each feature: proportional to ncov within the cohort, and the size
+    # factors are relative within each cohort (d1_chronic)
+    ncov = pd.concat([pd.read_csv(os.path.join(cov_dir, f"{r}.tsv"), sep="\t", index_col=0).iloc[:, 0]
                       for r in done], axis=1, keys=ids)
     # a feature is absent from a run's file only if the file predates it (bedcov reports every region)
     stale = ncov.columns[ncov.isna().any()]
@@ -154,15 +174,6 @@ def govaere(gov_dir, runs_tsv, soft):
                           "nas": pd.to_numeric(meta.loc[done, "nas score"], errors="coerce").to_numpy(),
                           "group": np.nan}, index=ids)
     return ncov, genes, pd.DataFrame(qc).T, pheno
-
-
-def size_factors(genes):
-    """Median-of-ratios size factors (geometric mean 1) of AUC-scaled gene sums (genes x samples, protein-coding)."""
-    g = genes[(genes > 0).mean(axis=1) >= 0.9]
-    g = g.drop(g.mean(axis=1).nlargest(max(1, len(g) // 100)).index)
-    lg = np.log(g.where(g > 0))
-    sf = np.exp(lg.sub(lg.mean(axis=1), axis=0).median())
-    return sf / np.exp(np.log(sf).mean())
 
 
 def technical_covariates(qc, genes_all):
@@ -273,10 +284,13 @@ def combine(cs, weights=WEIGHTS, suffix=""):
     p = cs[[f"{c}_p{suffix}" for c in cohorts]].to_numpy(float)
     n = cs[[f"{c}_n{suffix}" for c in cohorts]].to_numpy(float)
     w = w.to_numpy(float)
-    ok = np.isfinite(r) & (w > 0)
-    wsum = (ok * w).sum(axis=1)
+    ok = np.isfinite(r) & (w > 0)                     # cohorts that contribute to a feature
+    w_ok = np.where(ok, w, 0.0)
+    wsum = w_ok.sum(axis=1)
+    weighted_r = (np.where(ok, r, 0.0) * w_ok).sum(axis=1)
     out = pd.DataFrame(index=cs.index)
-    out["D1_chronic"] = np.where(wsum > 0, np.nansum(np.where(ok, r * w, 0), axis=1) / np.where(wsum > 0, wsum, 1), np.nan)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out["D1_chronic"] = np.where(wsum > 0, weighted_r / wsum, np.nan)
     z = np.sign(r) * stats.norm.isf(np.clip(p, 1e-300, 1) / 2)
     sw = np.where(ok, np.sqrt(n), 0)
     with np.errstate(invalid="ignore", divide="ignore"):
@@ -289,15 +303,41 @@ def combine(cs, weights=WEIGHTS, suffix=""):
     return out
 
 
-def _parent_adjusted(expr, ncov, pheno, covars, log_genes, parents, suffix=""):
+def _parent_adjusted(expr, ncov, pheno, covars, parent_expr, parents, suffix=""):
     """Cohort statistics of loci with a parent gene, with the parent's expression as an extra covariate."""
     rows = []
     for fid, gid in parents.items():
-        if fid not in expr.index or gid not in log_genes.index:
+        if fid not in expr.index or gid not in parent_expr.index:
             continue
-        cv = {c: z.assign(parent=log_genes.loc[gid, z.index]) for c, z in covars.items()}
+        cv = {c: z.assign(parent=parent_expr.loc[gid, z.index]) for c, z in covars.items()}
         rows.append(cohort_stats(expr.loc[[fid]], ncov.loc[[fid]], pheno, cv, suffix=suffix))
     return pd.concat(rows) if rows else pd.DataFrame()
+
+
+def _parent_check(expr, genes, log_genes, pheno, tech, parents, scored):
+    """
+    Parent genes of the loci (`parents`: locus -> gene id): parent expression, the parents' own D1_chronic, and per
+    locus parent_gene / parent_rho (median over cohorts of the Spearman correlation of locus and parent) /
+    parent_D1_chronic / parent_driven (rho >= PARENT_RHO, parent FDR < 0.05, same sign as the locus' `scored`
+    D1_chronic). Returns (table indexed like `scored`, parent log expression, the parents of the driven loci).
+    """
+    parents = parents[parents.isin(genes.index) & parents.index.isin(expr.index)]
+    parent_expr = log_genes.loc[parents.unique()]
+    # the parents' own association; their gene sums decide detection, as ncov does for the loci
+    parent_assoc = combine(cohort_stats(parent_expr, genes.loc[parents.unique()], pheno, tech))
+    cohort_samples = [pheno.index[pheno["cohort"] == c] for c in ALL_COHORTS]
+    rho = pd.Series({fid: np.nanmedian([stats.spearmanr(expr.loc[fid, idx], parent_expr.loc[gid, idx])[0]
+                                        for idx in cohort_samples])
+                     for fid, gid in parents.items()})
+    out = pd.DataFrame(index=scored.index)
+    out["parent_gene"] = parents.reindex(out.index)
+    out["parent_rho"] = rho.reindex(out.index)
+    out["parent_D1_chronic"] = parents.map(parent_assoc["D1_chronic"]).reindex(out.index)
+    parent_fdr = parents.map(parent_assoc["chronic_fdr"]).reindex(out.index)
+    driven = ((out["parent_rho"] >= PARENT_RHO) & (parent_fdr < 0.05)
+              & (np.sign(out["parent_D1_chronic"]) == np.sign(scored["D1_chronic"])))
+    out["parent_driven"] = driven.fillna(False)
+    return out, parent_expr, parents[out.index[out["parent_driven"]]]
 
 
 def d1_chronic(ncov, pheno, genes, qc, symbol_to_id, protein_coding, parents=None, pseudocount=0.05):
@@ -306,13 +346,20 @@ def d1_chronic(ncov, pheno, genes, qc, symbol_to_id, protein_coding, parents=Non
     gene sums (unversioned gene id x samples); qc: recount_qc rows indexed by sample_id; symbol_to_id: gene symbol ->
     unversioned id; protein_coding: ids of protein-coding genes (size factors); parents: locus -> parent gene id
     (homology), for the parent check. Returns the feature table and the size factors.
+
+    1. per cohort: size factors, technical covariates, cell-type marker scores;
+    2. scored statistics (technical covariates) and cell-intrinsic ones (+ cell-type markers), combined over cohorts;
+    3. parent check: loci driven by a disease-associated parent gene get both statistics recomputed with the parent's
+       expression as an extra covariate, and the combination and FDR are redone over all features.
     """
     ncov = ncov[pheno.index.intersection(ncov.columns).intersection(genes.columns)]
     pheno = pheno.loc[ncov.columns]
     genes = genes[ncov.columns]
+
+    # 1.
     pc = genes.loc[genes.index.intersection(pd.Index(protein_coding))]
     sf, tech, cells = {}, {}, {}
-    log_genes = np.log2(genes + 1)
+    log_genes = np.log2(genes + 1)          # samples of every cohort are overwritten with scaled values below
     for cohort in ALL_COHORTS:
         idx = pheno.index[pheno["cohort"] == cohort]
         if not len(idx):
@@ -324,38 +371,32 @@ def d1_chronic(ncov, pheno, genes, qc, symbol_to_id, protein_coding, parents=Non
         cells[cohort] = pd.concat([tech[cohort], cell_scores(lg, symbol_to_id)], axis=1)
     sf = pd.concat(sf.values())
     expr = np.log2(ncov.div(sf[ncov.columns], axis=1) + pseudocount)
+
+    # 2.
     cs = cohort_stats(expr, ncov, pheno, tech)
-    out = pd.concat([combine(cs), cs], axis=1)
     cell = cohort_stats(expr, ncov, pheno, cells, suffix="_cell")
-    cc = combine(cell, suffix="_cell")
-    out["D1_chronic_cell"], out["chronic_cell_fdr"] = cc["D1_chronic"], cc["chronic_fdr"]
-    out = pd.concat([out, cell[[c for c in cell.columns if c.endswith("_r_cell")]]], axis=1)
+    out = pd.concat([combine(cs), cs], axis=1)
+    cell_r = [c for c in cell.columns if c.endswith("_r_cell")]
+
+    def put_cell(cell):
+        cc = combine(cell, suffix="_cell")
+        out["D1_chronic_cell"], out["chronic_cell_fdr"] = cc["D1_chronic"], cc["chronic_fdr"]
+        out[cell_r] = cell[cell_r]
+
+    put_cell(cell)
     out["parent_driven"] = False
-    if parents is not None and len(parents):
-        parents = parents[parents.isin(genes.index) & parents.index.isin(expr.index)]
-        pg = log_genes.loc[parents.unique()]
-        pres = combine(cohort_stats(pg, genes.loc[parents.unique()], pheno, tech))
-        rho = pd.Series({fid: np.nanmedian([stats.spearmanr(expr.loc[fid, idx], pg.loc[gid, idx])[0]
-                                            for idx in (pheno.index[pheno["cohort"] == c] for c in ALL_COHORTS)])
-                         for fid, gid in parents.items()})
-        out["parent_gene"] = parents.reindex(out.index)
-        out["parent_rho"] = rho.reindex(out.index)
-        out["parent_D1_chronic"] = parents.map(pres["D1_chronic"]).reindex(out.index)
-        par_fdr = parents.map(pres["chronic_fdr"]).reindex(out.index)
-        driven = ((out["parent_rho"] >= PARENT_RHO) & (par_fdr < 0.05)
-                  & (np.sign(out["parent_D1_chronic"]) == np.sign(out["D1_chronic"])))
-        out["parent_driven"] = driven.fillna(False)
-        flagged = out.index[out["parent_driven"]]
-        if len(flagged):
-            adj = _parent_adjusted(expr, ncov, pheno, tech, pg, parents[flagged])
-            out.loc[adj.index, adj.columns] = adj
-            redo = combine(out[cs.columns])
-            out[redo.columns] = redo      # FDR over all features, with the parent-adjusted statistics in place
-            # the cell-intrinsic statistics of these loci are parent-adjusted too
-            adj = _parent_adjusted(expr, ncov, pheno, cells, pg, parents[flagged], suffix="_cell")
-            cell.loc[adj.index, adj.columns] = adj
-            cc = combine(cell, suffix="_cell")
-            out["D1_chronic_cell"], out["chronic_cell_fdr"] = cc["D1_chronic"], cc["chronic_fdr"]
-            out[[c for c in cell.columns if c.endswith("_r_cell")]] = cell[[c for c in cell.columns
-                                                                            if c.endswith("_r_cell")]]
+    if parents is None or not len(parents):
+        return out, sf
+
+    # 3.
+    check, parent_expr, driven = _parent_check(expr, genes, log_genes, pheno, tech, parents, out)
+    out[check.columns] = check
+    if len(driven):
+        adj = _parent_adjusted(expr, ncov, pheno, tech, parent_expr, driven)
+        out.loc[adj.index, adj.columns] = adj
+        redo = combine(out[cs.columns])
+        out[redo.columns] = redo      # FDR over all features, with the parent-adjusted statistics in place
+        adj = _parent_adjusted(expr, ncov, pheno, cells, parent_expr, driven, suffix="_cell")
+        cell.loc[adj.index, adj.columns] = adj
+        put_cell(cell)
     return out, sf

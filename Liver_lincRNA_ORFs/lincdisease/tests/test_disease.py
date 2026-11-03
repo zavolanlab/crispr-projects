@@ -62,7 +62,8 @@ def test_d2_hazard_direction():
     cdr["age_at_initial_pathologic_diagnosis"] = rng.integers(40, 80, len(cdr))
     expr = pd.DataFrame([x, rng.normal(0, 1, len(tum))], index=["risk", "null"], columns=tum["sample_id"])
     ncov = expr * 0 + 1
-    res = disease.d2_survival(expr, s, cdr, ncov=ncov)
+    sf = pd.Series(np.exp(rng.normal(0, 0.2, len(tum))), index=tum["sample_id"])
+    res = disease.d2_survival(expr, s, cdr, sf, ncov=ncov)
     assert res.loc["risk", "HR_OS"] > 2
     assert res.loc["risk", "D2"] > 5
     assert abs(res.loc["null", "D2"]) < 3
@@ -78,3 +79,30 @@ def test_disease_coverage_counts_missing_subcomponents():
     res = integrate.disease_score(stats, pd.Series(True, index=stats.index))
     assert res.loc[0, "disease_coverage"] == pytest.approx(1 - 0.25 * 0.3)
     assert res.loc[1, "disease_coverage"] == pytest.approx(1.0)
+
+
+def test_d1_hcc_is_the_paired_statistic():
+    s = _samples()
+    rng = np.random.default_rng(3)
+    expr = pd.DataFrame(rng.normal(size=(1, len(s))), index=["x"], columns=s["sample_id"])
+    expr.loc["x", s.loc[s["source"] == "gtex", "sample_id"]] += 5      # GTEx batch: no effect on D1 HCC
+    res = disease.d1_hcc(expr, s)
+    assert res.loc["x", "D1_HCC"] == res.loc["x", "r_paired"]
+    assert res.loc["x", "r_vs_gtex"] < -0.9
+
+
+def test_hcc_and_chronic_scores_and_direction():
+    from lincdisease import integrate
+    rng = np.random.default_rng(2)
+    cols = ["D1_HCC", "D1_chronic", "D2", "D3", "D4", "D4_hcc", "D4_chronic", "D5", "D5_hcc", "D5_chronic",
+            "gtex_liver_median", "liver_specificity", "cell_line_log2TPM"]
+    stats = pd.DataFrame(rng.normal(size=(200, len(cols))), columns=cols)
+    stats.loc[0, ["D1_HCC", "D2", "D3"]] = [10, 10, 10]          # strong and up in every HCC component
+    stats.loc[1, ["D1_HCC", "D2", "D3"]] = [-10, -10, -10]
+    stats.loc[2, "D1_chronic"] = -10                               # strong, down with disease
+    res = integrate.disease_score(stats, pd.Series(True, index=stats.index))
+    assert res.loc[0, "hcc_direction"] == "oncogene-like" and res.loc[1, "hcc_direction"] == "suppressor-like"
+    # magnitude is ranked: down-regulated loci score as high as up-regulated ones
+    assert res.loc[1, "comp_D1_HCC"] == pytest.approx(res.loc[0, "comp_D1_HCC"])
+    assert res.loc[2, "chronic_direction"] == "down" and res.loc[2, "comp_D1_chronic"] > 0.99
+    assert res["hcc_score"].between(0, 1).all() and res["chronic_score"].between(0, 1).all()
