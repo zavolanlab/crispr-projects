@@ -15,10 +15,10 @@ Sample scaling: `ncov` is divided by median-of-ratios size factors of the recoun
 (expression.py; hepatocyte transcripts, which dominate liver RNA, lose their share with injury).
 
 Per cohort, a signed partial rank correlation in [-1, 1] of log2(scaled ncov + pseudocount) with the phenotype
-(> 0 = higher with disease): fibrosis stage (hoang, govaere; NAS reported), NAFL + NASH vs normal-weight + obese (suppli),
-HCV vs non-HCV (hcv). Ranks of expression and phenotype are residualized on the ranks of the technical covariates
-(log input reads, % uniquely mapped reads, exonic fraction; Suppli cases differ from controls in all three), and
-the p-value is a t test with n - 2 - k degrees of freedom.
+(> 0 = higher with disease): fibrosis stage (hoang, govaere; NAS reported), NAFL + NASH vs normal-weight + obese
+(suppli), HCV vs non-HCV (hcv). Ranks of expression and phenotype are residualized on the ranks of the technical
+covariates (log input reads, % uniquely mapped reads, exonic fraction; Suppli cases differ from controls in all
+three), and the p-value is a t test with n - 2 - k degrees of freedom.
   scored         technical covariates; for loci whose expression follows a disease-associated parent gene
                  (`parent_driven`), the parent gene's expression is added as a covariate
   cell-intrinsic technical covariates + cell-type marker scores (reported, not scored: a lincRNA of stellate
@@ -35,8 +35,9 @@ import pandas as pd
 from scipy import stats
 
 from . import quant
-from .disease import bh
-from .expression import size_factors
+from .disease import bh, stouffer, weighted_mean
+from .expression import changed_features, size_factors
+from .quant import parse_attributes
 
 COHORTS = {"hoang": "SRP197353", "suppli": "SRP186450", "hcv": "SRP078450"}    # recount3 projects
 ALL_COHORTS = [*COHORTS, "govaere"]
@@ -64,18 +65,6 @@ CELL_MARKERS = {
 # associated with chronic disease (FDR < 0.05, same sign) are parent-adjusted; at 0.8 YWHAZP2/3 (rho 0.6-0.63 with
 # YWHAZ, D1_chronic 0.66) escaped while their own signal (0.53-0.59) was mostly the parent's
 PARENT_RHO = 0.5
-
-
-def parse_attributes(values):
-    """recount3 `sample_attributes` ('key;;value|key;;value') -> DataFrame of attributes."""
-    rows = []
-    for v in values:
-        d = {}
-        for item in (v.split("|") if isinstance(v, str) else []):
-            k, _, val = item.partition(";;")
-            d[k.strip()] = val.strip()
-        rows.append(d)
-    return pd.DataFrame(rows)
 
 
 def phenotypes(man):
@@ -109,7 +98,6 @@ def manifest():
     return man[keep].reset_index(drop=True)
 
 
-
 def read_soft(soft):
     """GEO sample annotation (acc.cgi text format) -> one row per GSM with its sample characteristics as columns."""
     rec, cur = [], None
@@ -129,51 +117,67 @@ def govaere_samples(runs_tsv, soft):
     return runs.merge(read_soft(soft), left_on="experiment_alias", right_on="gsm").set_index("run_accession")
 
 
-def govaere(gov_dir, runs_tsv, soft, regions, exclude=()):
-    """
-    Govaere runs of the run table except `exclude` -> ncov (features x samples), STAR gene counts (unversioned
-    gene id x samples; column 4, reverse-stranded library), QC rows in recount_qc column names, phenotypes.
-    Sample ids 'govaere:<run>'. `soft`: GEO sample annotation with the sample characteristics. Raises if a run has
-    no locus coverage or the coverage was computed on regions other than `regions` (current quant/regions.tsv).
-    """
-    from .expression import changed_features
-    meta = govaere_samples(runs_tsv, soft)
-    done = [r for r in meta.index if r not in set(exclude)]
-    cov_dir = os.path.join(gov_dir, "locus_cov")
-    missing = [r for r in done if not os.path.exists(os.path.join(cov_dir, f"{r}.tsv"))]
+def _govaere_locus_cov(cov_dir, runs, ids, regions):
+    """Locus coverage of the runs (features x ids): summed per-base depth over the regions of each feature."""
+    missing = [r for r in runs if not os.path.exists(os.path.join(cov_dir, f"{r}.tsv"))]
     if missing:
         raise ValueError(f"no locus coverage for {len(missing)} Govaere runs ({missing[:3]})")
     saved = os.path.join(cov_dir, "regions.tsv")
     if not os.path.exists(saved) or changed_features(pd.read_csv(saved, sep="\t"), regions):
         raise ValueError(f"{cov_dir} was computed on other regions than quant/regions.tsv; delete it to recompute")
-    ids = ["govaere:" + r for r in done]
-    # summed per-base depth over the regions of each feature: proportional to ncov within the cohort, and the size
-    # factors are relative within each cohort (d1_chronic)
-    ncov = pd.concat([pd.read_csv(os.path.join(cov_dir, f"{r}.tsv"), sep="\t", index_col=0).iloc[:, 0]
-                      for r in done], axis=1, keys=ids)
+    cov = pd.concat([pd.read_csv(os.path.join(cov_dir, f"{r}.tsv"), sep="\t", index_col=0).iloc[:, 0]
+                     for r in runs], axis=1, keys=ids)
     # a feature is absent from a run's file only if the file predates it (bedcov reports every region)
-    stale = ncov.columns[ncov.isna().any()]
+    stale = cov.columns[cov.isna().any()]
     if len(stale):
         raise ValueError(f"{len(stale)} Govaere locus_cov files lack features of the others (older regions.tsv); "
                          f"delete and recompute them: {', '.join(c.split(':')[1] for c in stale[:10])}")
-    genes = pd.concat([pd.read_csv(os.path.join(gov_dir, "counts", f"{r}.ReadsPerGene.tsv"), sep="\t", header=None,
-                                   index_col=0)[3] for r in done], axis=1, keys=ids)
-    assigned = genes.loc[~genes.index.str.startswith("N_")].sum()
-    genes = genes.loc[~genes.index.str.startswith("N_")]
+    return cov
+
+
+def _star_gene_counts(counts_dir, runs, ids):
+    """STAR gene counts (column 4, reverse-stranded library; unversioned gene id x ids) and the reads assigned to
+    genes per run."""
+    genes = pd.concat([pd.read_csv(os.path.join(counts_dir, f"{r}.ReadsPerGene.tsv"), sep="\t", header=None,
+                                   index_col=0)[3] for r in runs], axis=1, keys=ids)
+    genes = genes.loc[~genes.index.str.startswith("N_")]       # N_unmapped, N_multimapping, ... summary rows
+    assigned = genes.sum()
     genes.index = genes.index.str.split(".").str[0]
-    genes = genes.groupby(level=0).sum()
+    return genes.groupby(level=0).sum(), assigned
+
+
+def _star_qc(log_dir, runs, ids, assigned):
+    """QC rows (recount_qc column names) from the STAR final logs; exonic fraction = assigned / uniquely mapped."""
     qc = {}
-    for r, i in zip(done, ids):
-        d = dict((k.strip(), v.strip()) for k, v in (line.split("|", 1) for line in
-                 open(os.path.join(gov_dir, "star_logs", f"{r}.Log.final.out")) if "|" in line))
-        qc[i] = {"star.number_of_input_reads_both": int(d["Number of input reads"]),
-                 "star.uniquely_mapped_reads_%_both": float(d["Uniquely mapped reads %"].rstrip("%")),
-                 "exonic_fraction": assigned[i] / int(d["Uniquely mapped reads number"])}
+    for r, i in zip(runs, ids):
+        with open(os.path.join(log_dir, f"{r}.Log.final.out")) as fh:
+            log = dict((k.strip(), v.strip()) for k, v in (line.split("|", 1) for line in fh if "|" in line))
+        qc[i] = {"star.number_of_input_reads_both": int(log["Number of input reads"]),
+                 "star.uniquely_mapped_reads_%_both": float(log["Uniquely mapped reads %"].rstrip("%")),
+                 "exonic_fraction": assigned[i] / int(log["Uniquely mapped reads number"])}
+    return pd.DataFrame(qc).T
+
+
+def govaere(gov_dir, runs_tsv, soft, regions, exclude=()):
+    """
+    Govaere runs of the run table except `exclude` -> ncov (features x samples), STAR gene counts (unversioned
+    gene id x samples), QC rows in recount_qc column names, phenotypes. Sample ids 'govaere:<run>'. `soft`: GEO
+    sample annotation with the sample characteristics. Raises if a run has no locus coverage or the coverage was
+    computed on regions other than `regions` (current quant/regions.tsv).
+    """
+    meta = govaere_samples(runs_tsv, soft)
+    runs = [r for r in meta.index if r not in set(exclude)]
+    ids = ["govaere:" + r for r in runs]
+    # summed depth rather than ncov: proportional to ncov within the cohort, and the size factors are relative
+    # within each cohort (d1_chronic)
+    ncov = _govaere_locus_cov(os.path.join(gov_dir, "locus_cov"), runs, ids, regions)
+    genes, assigned = _star_gene_counts(os.path.join(gov_dir, "counts"), runs, ids)
+    qc = _star_qc(os.path.join(gov_dir, "star_logs"), runs, ids, assigned)
     pheno = pd.DataFrame({"cohort": "govaere",
-                          "fibrosis_stage": pd.to_numeric(meta.loc[done, "fibrosis stage"], errors="coerce").to_numpy(),
-                          "nas": pd.to_numeric(meta.loc[done, "nas score"], errors="coerce").to_numpy(),
+                          "fibrosis_stage": pd.to_numeric(meta.loc[runs, "fibrosis stage"], errors="coerce").to_numpy(),
+                          "nas": pd.to_numeric(meta.loc[runs, "nas score"], errors="coerce").to_numpy(),
                           "group": np.nan}, index=ids)
-    return ncov, genes, pd.DataFrame(qc).T, pheno
+    return ncov, genes, qc, pheno
 
 
 def technical_covariates(qc, genes_all):
@@ -279,25 +283,12 @@ def cohort_weights(cs, weights=WEIGHTS, suffix=""):
 def combine(cs, weights=WEIGHTS, suffix=""):
     """D1_chronic (weighted mean of the cohort statistics, cohort_weights), Stouffer p and BH-FDR."""
     w = cohort_weights(cs, weights, suffix)
-    cohorts = list(w.columns)
-    r = cs[[f"{c}_r{suffix}" for c in cohorts]].to_numpy(float)
-    p = cs[[f"{c}_p{suffix}" for c in cohorts]].to_numpy(float)
-    n = cs[[f"{c}_n{suffix}" for c in cohorts]].to_numpy(float)
+    r, p, n = (cs[[f"{c}_{x}{suffix}" for c in w.columns]].to_numpy(float) for x in ("r", "p", "n"))
     w = w.to_numpy(float)
     ok = np.isfinite(r) & (w > 0)                     # cohorts that contribute to a feature
-    w_ok = np.where(ok, w, 0.0)
-    wsum = w_ok.sum(axis=1)
-    weighted_r = (np.where(ok, r, 0.0) * w_ok).sum(axis=1)
     out = pd.DataFrame(index=cs.index)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        out["D1_chronic"] = np.where(wsum > 0, weighted_r / wsum, np.nan)
-    z = np.sign(r) * stats.norm.isf(np.clip(p, 1e-300, 1) / 2)
-    sw = np.where(ok, np.sqrt(n), 0)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        zc = np.nansum(np.where(ok, z * sw, 0), axis=1) / np.sqrt((sw ** 2).sum(axis=1))
-    zc = np.where(ok.any(axis=1), zc, np.nan)
-    out["chronic_z"] = zc
-    out["chronic_p"] = np.where(np.isfinite(zc), 2 * stats.norm.sf(np.abs(zc)), np.nan)
+    out["D1_chronic"] = weighted_mean(r, w, ok)
+    out["chronic_z"], out["chronic_p"] = stouffer(r, p, n, ok)
     out["chronic_fdr"] = bh(out["chronic_p"])
     out["chronic_n_cohorts"] = ok.sum(axis=1)
     return out

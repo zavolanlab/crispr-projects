@@ -1,6 +1,7 @@
 """
 ENCODE HepG2 RNA-seq features of the mechanism classes (LOGIC.md, Step 4), from stranded signal bigWigs of
-uniquely mapped reads (GRCh38), summed over each feature's quantifiable positions on its own strand:
+uniquely mapped reads (GRCh38), summed on the feature's strand over its exons minus the exons of other GENCODE
+genes on the same strand (eclip.stranded_regions):
 
   nuclear enrichment  log2 (nucleus + eps) / (cytosol + eps), mean signal per base, replicates averaged
                       (Lecuyer CeFra-seq: nucleus ENCSR061SFU, cytosol ENCSR862HPO)
@@ -42,11 +43,13 @@ def condition_signal(regions, strands, files, data_dir):
 
 
 def log_ratio(a, b, eps=EPS, min_signal=MIN_SIGNAL):
+    """log2 (a + eps) / (b + eps); missing where both a and b are below min_signal."""
     r = np.log2((a + eps) / (b + eps))
     return r.where((a >= min_signal) | (b >= min_signal))
 
 
 def features(regions, strands, data_dir):
+    """Per feature: mean signal per base in nucleus and cytosol (signal_) and nuclear_log2ratio."""
     sig = pd.DataFrame({c: condition_signal(regions, strands, f, data_dir) for c, f in BIGWIGS.items()})
     out = sig.add_prefix("signal_")
     out["nuclear_log2ratio"] = log_ratio(sig["nucleus"], sig["cytosol"])

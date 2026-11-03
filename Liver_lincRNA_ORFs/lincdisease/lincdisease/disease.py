@@ -23,16 +23,39 @@ from statsmodels.stats.multitest import multipletests
 
 
 def log_expr(ncov, pseudocount):
+    """log2(ncov + pseudocount), the expression scale of every statistic."""
     return np.log2(ncov + pseudocount)
 
 
 def bh(p):
+    """Benjamini-Hochberg FDR of the non-missing p-values (missing stay missing)."""
     p = pd.Series(p, dtype=float)
     out = pd.Series(np.nan, index=p.index)
     ok = p.notna()
     if ok.any():
         out[ok] = multipletests(p[ok], method="fdr_bh")[1]
     return out
+
+
+def weighted_mean(r, w, ok):
+    """Row-wise mean of r (features x cohorts) weighted by w over the cells where `ok`; NaN where no weight."""
+    w = np.where(ok, w, 0.0)
+    wsum = w.sum(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(wsum > 0, (np.where(ok, r, 0.0) * w).sum(axis=1) / wsum, np.nan)
+
+
+def stouffer(r, p, n, ok):
+    """
+    Row-wise Stouffer combination over the cells where `ok` (features x cohorts): z of each two-sided p with the
+    sign of its statistic r, weights sqrt(n). Returns the combined z and its two-sided p (NaN where no cell is ok).
+    """
+    z = np.sign(r) * stats.norm.isf(np.clip(p, 1e-300, 1) / 2)
+    sw = np.where(ok, np.sqrt(n), 0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        zc = np.nansum(np.where(ok, z * sw, 0), axis=1) / np.sqrt((sw ** 2).sum(axis=1))
+    zc = np.where(ok.any(axis=1), zc, np.nan)
+    return zc, np.where(np.isfinite(zc), 2 * stats.norm.sf(np.abs(zc)), np.nan)
 
 
 def rank_biserial(x, y):
@@ -56,28 +79,33 @@ def paired_rank_biserial(diff):
 
 
 def tcga_groups(samples):
-    """Primary tumours (one per patient), adjacent normals, and GTEx liver sample ids, plus patient barcodes."""
+    """Primary tumours and adjacent normals (one each per patient, with a `patient` barcode column) and GTEx liver."""
     t = samples[samples["source"] == "tcga"].copy()
     t["patient"] = t["tcga_barcode"].str[:12]
-    tum = t[t["cgc_sample_sample_type"] == "Primary Tumor"].sort_values("tcga_barcode").drop_duplicates("patient")
-    nor = t[t["cgc_sample_sample_type"] == "Solid Tissue Normal"].sort_values("tcga_barcode").drop_duplicates("patient")
+    one_per_patient = lambda kind: (t[t["cgc_sample_sample_type"] == kind].sort_values("tcga_barcode")
+                                    .drop_duplicates("patient"))
     gtex_liver = samples[(samples["source"] == "gtex") & (samples["project"] == "LIVER")]
-    return tum, nor, gtex_liver
+    return one_per_patient("Primary Tumor"), one_per_patient("Solid Tissue Normal"), gtex_liver
 
 
 def d1_hcc(expr, samples):
+    """
+    D1 HCC per feature (module docstring): paired tumour - normal (log2FC_paired, r_paired = D1_HCC, p, FDR) and,
+    reported only, tumours vs GTEx liver (log2FC_vs_gtex, auc_vs_gtex, r_vs_gtex, p, FDR), with the group sizes.
+    """
     tum, nor, liver = tcga_groups(samples)
     pairs = tum.merge(nor, on="patient", suffixes=("_t", "_n"))
-    et = expr[tum["sample_id"]]
-    eg = expr[liver["sample_id"]]
+    e_tum = expr[tum["sample_id"]]
+    e_gtex = expr[liver["sample_id"]]
     diff = expr[pairs["sample_id_t"]].to_numpy() - expr[pairs["sample_id_n"]].to_numpy()
     rows = []
     for i, fid in enumerate(expr.index):
         r_p, p_p = paired_rank_biserial(diff[i])
-        r_g, p_g = rank_biserial(et.iloc[i], eg.iloc[i])
-        rows.append((fid, diff[i].mean(), r_p, p_p, et.iloc[i].mean() - eg.iloc[i].mean(), (r_g + 1) / 2, r_g, p_g))
-    out = pd.DataFrame(rows, columns=["feature_id", "log2FC_paired", "r_paired", "p_paired",
-                                      "log2FC_vs_gtex", "auc_vs_gtex", "r_vs_gtex", "p_vs_gtex"]).set_index("feature_id")
+        r_g, p_g = rank_biserial(e_tum.iloc[i], e_gtex.iloc[i])
+        rows.append((fid, diff[i].mean(), r_p, p_p,
+                     e_tum.iloc[i].mean() - e_gtex.iloc[i].mean(), (r_g + 1) / 2, r_g, p_g))
+    out = pd.DataFrame(rows, columns=["feature_id", "log2FC_paired", "r_paired", "p_paired", "log2FC_vs_gtex",
+                                      "auc_vs_gtex", "r_vs_gtex", "p_vs_gtex"]).set_index("feature_id")
     out["fdr_paired"] = bh(out["p_paired"])
     out["fdr_vs_gtex"] = bh(out["p_vs_gtex"])
     out["n_pairs"] = len(pairs)
@@ -110,6 +138,7 @@ COVARIATES = ["age", "late_stage", "log_sf"]
 
 
 def _cox(df, endpoint):
+    """Hazard ratio, Wald z and p of the standardized expression `x` (adjusted for COVARIATES) and the n used."""
     from lifelines import CoxPHFitter
     d = df[["x", *COVARIATES, endpoint, f"{endpoint}.time"]].dropna()
     d = d[d[f"{endpoint}.time"] > 0]
@@ -120,8 +149,11 @@ def _cox(df, endpoint):
 
 
 def d2_survival(expr, samples, cdr, size_factors, min_expressed=0.2, ncov=None):
-    """Cox models per feature; `ncov` (linear scale) decides which features are expressed enough to test;
-    `size_factors`: by sample_id. A model that does not converge leaves its columns missing (fit_error says why)."""
+    """
+    D2 per feature (module docstring): HR / z / p / n and BH-FDR per endpoint (OS, PFI) and D2 = mean z.
+    `ncov` (linear scale) decides which features are expressed enough to test; `size_factors`: by sample_id. A model
+    that does not converge leaves its columns missing (fit_error_<endpoint> says why).
+    """
     from lifelines.exceptions import ConvergenceError
     tab = survival_table(samples, cdr, size_factors)
     e = expr[tab["sample_id"]]

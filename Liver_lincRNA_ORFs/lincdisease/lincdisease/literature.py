@@ -1,14 +1,16 @@
 """
 D5 prior knowledge (LOGIC.md, Step 3): Europe PMC counts of papers on a locus with liver co-terms.
 
-Query per feature: the exact symbol and its usable HGNC previous symbols / aliases (usable_alias), each in
-title or abstract,
-AND an RNA term (guards against symbols that are also words, e.g. NORAD), AND a liver term:
-  n_any        symbol + RNA term
-  n_liver      symbol + RNA term + liver term
-  n_review     ... restricted to reviews
-  n_retracted  ... restricted to retracted publications
-Statistic D5 = log2(1 + n_liver - n_retracted). Exact-phrase matching keeps papers on a neighbouring
+Query per feature: the exact symbol or one of its usable HGNC previous symbols / aliases (usable_alias), in title
+or abstract, AND an RNA term (guards against symbols that are also words, e.g. NORAD), AND a liver term:
+  n_any            symbol + RNA term
+  n_liver          symbol + RNA term + liver term
+  n_review         ... restricted to reviews
+  n_retracted      ... restricted to retracted publications
+  n_liver_cancer   n_liver papers with a cancer term
+  n_liver_chronic  n_liver papers with a chronic liver disease term
+Statistic D5 = log2(1 + n_liver - n_retracted); its parts for the summary scores D5_hcc = log2(1 + n_liver_cancer)
+and D5_chronic = log2(1 + n_liver_chronic). Exact-phrase matching keeps papers on a neighbouring
 symbol (LINC01089) from being credited to another (LINC01090). Loci named only by an Ensembl or StringTie id
 get counts of 0 without a query (nobody publishes on an unnamed locus).
 """
@@ -35,6 +37,7 @@ CANCER_TERMS = ['cancer', 'carcinoma', 'tumour', 'tumor', 'HCC', 'hepatoma', 'he
 CHRONIC_TERMS = ['NAFLD', 'MASLD', 'NASH', 'MASH', 'steatosis', 'steatohepatitis', '"fatty liver"', 'fibrosis',
                  'cirrhosis', 'hepatitis', '"liver injury"', '"liver failure"', 'cholestasis', 'cholestatic']
 UNNAMED = re.compile(r"^(ENSG\d+|MSTRG\.\d+|NONHSAG\d+)")
+COUNTS = ("n_any", "n_liver", "n_review", "n_retracted", "n_liver_cancer", "n_liver_chronic")    # build_queries
 
 
 def usable_alias(alias, approved):
@@ -59,6 +62,7 @@ def _field(term):
 
 
 def build_queries(symbol, aliases=()):
+    """Europe PMC query string of each of COUNTS."""
     names = " OR ".join(_field(n) for n in [symbol, *aliases])
     rna = " OR ".join(RNA_TERMS)
     liver = " OR ".join(LIVER_TERMS)
@@ -75,6 +79,7 @@ def build_queries(symbol, aliases=()):
 
 
 def hit_count(query, retries=4):
+    """Number of Europe PMC hits of a query (None if every attempt fails)."""
     url = EUROPEPMC + "?" + urllib.parse.urlencode({"query": query, "format": "json", "pageSize": 1,
                                                      "resultType": "idlist"})
     for attempt in range(retries):
@@ -88,7 +93,7 @@ def hit_count(query, retries=4):
 
 def d5(names, aliases, cache_path, threads=4, max_aliases=5):
     """
-    `names`: Series feature_id -> symbol. Counts are cached per query string in `cache_path` (JSON) so that
+    COUNTS and D5 per feature. `names`: Series feature_id -> symbol; `aliases`: hgnc_aliases. Counts are cached per query string in `cache_path` (JSON) so that
     reruns only query what is new.
     """
     cache = {}
@@ -122,11 +127,10 @@ def d5(names, aliases, cache_path, threads=4, max_aliases=5):
             for k, q in queries[fid].items():
                 rec[k] = cache.get(q)
         else:
-            rec.update(n_any=0, n_liver=0, n_review=0, n_retracted=0, n_liver_cancer=0, n_liver_chronic=0,
-                       aliases_used="")
+            rec.update(dict.fromkeys(COUNTS, 0), aliases_used="")
         rows.append(rec)
     out = pd.DataFrame(rows).set_index("feature_id")
-    for k in ("n_any", "n_liver", "n_review", "n_retracted", "n_liver_cancer", "n_liver_chronic"):
+    for k in COUNTS:
         out[k] = pd.to_numeric(out[k], errors="coerce")
     out["D5"] = np.log2(1 + (out["n_liver"] - out["n_retracted"]).clip(lower=0))
     out["D5_hcc"] = np.log2(1 + out["n_liver_cancer"])

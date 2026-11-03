@@ -90,9 +90,8 @@ Unit tests on synthetic data for the statistics, the scoring and the input check
   `rules/govaere.smk` holds the Govaere alignment.
 - Compute nodes have no network. Steps that download (`fetch`, `manifest`, `chronic_manifest`, `nmd_manifest`,
   `hcc_manifest`, `quant`, `quant_sra`, `quant_nmd`, `quant_hcc`, `literature`, `govaere_fastq`) run on the login
-  node inside the Snakemake process. All other steps
-  are submitted with plain `sbatch` (`profile/config.yaml`), and their state is read with `sacct`
-  (`scripts/slurm_status.sh`).
+  node inside the Snakemake process. All other steps are submitted with plain `sbatch` (`profile/config.yaml`),
+  and their state is read with `sacct` (`scripts/slurm_status.sh`).
 - `fetch` downloads every public resource with a stable URL into `data_dir`. It also checks the files that were
   placed by hand (`resources.MANUAL`: journal supplements, GENCODE Ribo-seq ORFs, Pfam, GTEx eQTLs, MHCflurry
   models, proteomes) and lists each missing file with its source.

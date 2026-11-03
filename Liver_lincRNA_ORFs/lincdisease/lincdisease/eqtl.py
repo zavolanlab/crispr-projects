@@ -43,6 +43,10 @@ def parse_variant(v):
 
 
 def per_feature(links, egenes, pairs, gwas, proxy_distance=PROXY_DISTANCE, qval=QVAL):
+    """
+    The eQTL columns of the module docstring per feature. `links`: feature_genes; `egenes`, `pairs`: GTEx liver
+    eGene and significant variant-gene pair tables; `gwas`: genetics.read_liver_associations.
+    """
     eg = egenes.assign(g=egenes["gene_id"].str.split(".").str[0]).set_index("g")
     pr = pairs.assign(g=pairs["gene_id"].str.split(".").str[0])
     pr["chrom"], pr["pos"] = parse_variant(pr["variant_id"])

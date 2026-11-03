@@ -92,7 +92,7 @@ def read_gtf_exons(path):
     }).reset_index(drop=True)
 
 
-def _split_ids(value):
+def split_ids(value):
     if not isinstance(value, str) or not value.strip():
         return []
     return [v.strip() for v in value.split(",") if v.strip()]
@@ -116,7 +116,7 @@ def build_regions(lincrna_exons, gencode_exons, loci, control_genes, min_quant_b
     # GENCODE exons of the feature's own genes are not subtracted from it
     own = {}
     for locus_id, row in loci.iterrows():
-        ids = _split_ids(row.get("name_source_gene_ids")) + _split_ids(row.get("lncRNA_gene_ids"))
+        ids = split_ids(row.get("name_source_gene_ids")) + split_ids(row.get("lncRNA_gene_ids"))
         own[locus_id] = {i.split(".")[0] for i in ids}
     for name in control_genes:
         own["ctrl:" + name] = set(ctrl.loc[ctrl["gene_name"] == name, "gene_id"].str.split(".").str[0])
@@ -132,9 +132,10 @@ def build_regions(lincrna_exons, gencode_exons, loci, control_genes, min_quant_b
     regions = merge_intervals(pd.concat(regions, ignore_index=True))
 
     exonic = exons.assign(n=exons["end1"] - exons["start0"]).groupby("feature_id")["n"].sum()
-    quant = regions.assign(n=regions["end1"] - regions["start0"]).groupby("feature_id")["n"].sum()
+    quant_bases = regions.assign(n=regions["end1"] - regions["start0"]).groupby("feature_id")["n"].sum()
     span = exons.groupby("feature_id").agg(chrom=("chrom", "first"), start0=("start0", "min"), end1=("end1", "max"))
-    features = span.join(pd.DataFrame({"exonic_bases": exonic})).join(quant.rename("quant_bases")).fillna({"quant_bases": 0})
+    features = (span.join(exonic.rename("exonic_bases")).join(quant_bases.rename("quant_bases"))
+                .fillna({"quant_bases": 0}))
     features["quant_bases"] = features["quant_bases"].astype(int)
     features["quant_fraction"] = features["quant_bases"] / features["exonic_bases"]
     features["quantifiable"] = features["quant_bases"] >= min_quant_bases
@@ -143,7 +144,19 @@ def build_regions(lincrna_exons, gencode_exons, loci, control_genes, min_quant_b
 
 # ---------------------------------------------------------------- samples
 
-def _metadata_url(source, project, table):
+def parse_attributes(values):
+    """recount3 SRA `sample_attributes` ('key;;value|key;;value') -> DataFrame of attributes."""
+    rows = []
+    for v in values:
+        d = {}
+        for item in (v.split("|") if isinstance(v, str) else []):
+            k, _, val = item.partition(";;")
+            d[k.strip()] = val.strip()
+        rows.append(d)
+    return pd.DataFrame(rows)
+
+
+def metadata_url(source, project, table):
     sub = project[-2:]
     return f"{RECOUNT3}{source}/metadata/{sub}/{project}/{source}.{table}.{project}.MD.gz"
 
@@ -182,8 +195,8 @@ def manifest(source, project, keep_columns=()):
     Samples of a recount3 project (source tcga / gtex / sra) with bigWig URL, total coverage (AUC) and the
     requested phenotype columns of the source-specific metadata table.
     """
-    qc = _read_url_tsv(_metadata_url(source, project, "recount_qc"))
-    pheno = _read_url_tsv(_metadata_url(source, project, source))
+    qc = _read_url_tsv(metadata_url(source, project, "recount_qc"))
+    pheno = _read_url_tsv(metadata_url(source, project, source))
     m = qc[["rail_id", "external_id", "study", "bc_auc.all_reads_all_bases"]].rename(
         columns={"bc_auc.all_reads_all_bases": "auc"})
     keep = [c for c in keep_columns if c in pheno.columns]

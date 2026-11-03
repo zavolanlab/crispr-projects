@@ -11,17 +11,17 @@ nmd_log2fc = mean log2(scaled ncov + pseudocount) of the NMD-inhibited samples m
 (> 0 = up when NMD is inhibited), as the mean of the two conditions' log2 fold changes. Test: one-way linear model
 with the three conditions (control, UPF1 knock-down, SMG6 + SMG7 knock-down), t test of the contrast
 (UPF1 + SMG6/7) / 2 - control with the residual variance pooled within conditions (12 - 3 df), so that a
-difference between the two knock-downs does not inflate the variance; BH-FDR. Features detected (ncov > 0) in < `MIN_DETECTED` of the twelve
-samples are missing: HeLa does not express most liver lincRNAs.
+difference between the two knock-downs does not inflate the variance; BH-FDR. Features detected (ncov > 0) in
+< `MIN_DETECTED` of the twelve samples are missing: HeLa does not express most liver lincRNAs.
 """
 import numpy as np
 import pandas as pd
 from scipy import stats
 
 from . import quant
-from .chronic import parse_attributes
-from .expression import size_factors
 from .disease import bh
+from .expression import size_factors
+from .quant import parse_attributes
 
 PROJECT = "SRP083135"
 CONDITIONS = {"control": ("scramble", "none"), "UPF1_kd": ("UPF1", "none"), "SMG6_SMG7_kd": ("SMG6, SMG7", "none")}
@@ -54,6 +54,7 @@ def sensitivity(ncov, samples, genes, pseudocount=0.05, min_detected=MIN_DETECTE
     out["log2fc_UPF1_kd"] = mean["UPF1_kd"] - mean["control"]
     out["log2fc_SMG6_SMG7_kd"] = mean["SMG6_SMG7_kd"] - mean["control"]
     out["nmd_log2fc"] = out[["log2fc_UPF1_kd", "log2fc_SMG6_SMG7_kd"]].mean(axis=1)
+    # contrast (UPF1 + SMG6/7) / 2 - control: variance = pooled residual variance x sum of coefficient^2 / n
     n = {c: int((cond == c).sum()) for c in CONDITIONS}
     rss = sum(((e.loc[:, cond == c].sub(mean[c], axis=0)) ** 2).sum(axis=1) for c in CONDITIONS)
     df = sum(n.values()) - len(CONDITIONS)

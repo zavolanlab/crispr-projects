@@ -14,6 +14,7 @@ import pandas as pd
 
 GIAB = "https://ftp-trace.ncbi.nlm.nih.gov/ReferenceSamples/giab/release/genome-stratifications/v3.3/GRCh38@all/OtherDifficult/"
 XENA_GDC = "https://gdc-hub.s3.us-east-1.amazonaws.com/download/"
+GENCODE42 = "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_42/"
 URLS = {
     "segdups": "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/genomicSuperDups.txt.gz",
     # GRCh38 regions falsely duplicated relative to T2T-CHM13 (Aganezov et al. 2022), both copies
@@ -21,7 +22,7 @@ URLS = {
     "false_dup_incorrect": GIAB + "GRCh38_false_duplications_incorrect_copy.bed.gz",
     # snoRNABase / miRBase small RNAs (includes snoRNAs missing from GENCODE, e.g. those hosted by GAS5)
     "wgrna": "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/wgRna.txt.gz",
-    "gencode_gtf": "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_42/gencode.v42.annotation.gtf.gz",
+    "gencode_gtf": GENCODE42 + "gencode.v42.annotation.gtf.gz",
     "hgnc": "https://storage.googleapis.com/public-download-files/hgnc/tsv/tsv/hgnc_complete_set.txt",
     "gwas_catalog": "https://ftp.ebi.ac.uk/pub/databases/gwas/releases/latest/"
                     "gwas-catalog-associations_ontology-annotated-full.zip",
@@ -31,8 +32,9 @@ URLS = {
     "tcga_lihc_cn": XENA_GDC + "TCGA-LIHC.masked_cnv_DNAcopy.tsv.gz",
     # TCGA PanCanAtlas ABSOLUTE purity / ploidy (Taylor et al. 2018)
     "tcga_purity": "https://api.gdc.cancer.gov/data/4f277128-f793-4354-a13d-30cc7fe9f6b5",
-    # all GTEx samples of recount3 with their tissue (project)
+    # liftOver of the Chen et al. 2020 screen coordinates (hg19)
     "hg19_to_hg38_chain": "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/liftOver/hg19ToHg38.over.chain.gz",
+    # all GTEx samples of recount3 with their tissue (project)
     "gtex_projects": "https://recount-opendata.s3.amazonaws.com/recount3/release/human/data_sources/gtex/metadata/"
                      "gtex.recount_project.MD.gz",
 }
@@ -44,7 +46,6 @@ FILENAMES = {"tcga_cdr": "TCGA-CDR-SupplementalTableS1.xlsx",
 
 # files placed in the data directory by hand (no stable direct URL, or extracted from a larger archive):
 # path relative to the data directory -> where to get it
-GENCODE42 = "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_42/"
 UNIPROT_HUMAN = ("https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/reference_proteomes/"
                  "Eukaryota/UP000005640/")
 PRENSNER = "Prensner et al. 2021 (Nat Biotechnol), PMC supplement NIHMS1698134"
@@ -97,6 +98,7 @@ def fetch(key, data_dir, url=None):
 
 
 def _record(path, url):
+    """Append a download to downloads.tsv of its directory."""
     md5 = hashlib.md5()
     with open(path, "rb") as fh:
         for block in iter(lambda: fh.read(1 << 22), b""):
@@ -118,6 +120,7 @@ def read_segdups(data_dir):
 
 
 def read_bed3(path):
+    """chrom/start0/end1 of a (gzipped) BED file."""
     opener = gzip.open if path.endswith(".gz") else open
     with opener(path, "rt") as fh:
         rows = [ln.split("\t")[:3] for ln in fh if ln.strip() and not ln.startswith(("#", "track", "browser"))]
@@ -132,7 +135,7 @@ def read_false_dups(data_dir):
 
 
 def read_wgrna(data_dir):
-    """UCSC wgRna (bin, chrom, start, end, name, score, strand, thickStart, thickEnd, type)."""
-    df = pd.read_csv(fetch("wgrna", data_dir), sep="\t", header=None, usecols=[1, 2, 3, 4, 6, 9],
-                     names=["chrom", "start0", "end1", "name", "strand", "type"])
-    return df
+    """UCSC wgRna small RNAs as chrom/start0/end1/name/strand/type (file columns: bin, chrom, start, end, name,
+    score, strand, thickStart, thickEnd, type)."""
+    return pd.read_csv(fetch("wgrna", data_dir), sep="\t", header=None, usecols=[1, 2, 3, 4, 6, 9],
+                       names=["chrom", "start0", "end1", "name", "strand", "type"])

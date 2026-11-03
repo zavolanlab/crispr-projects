@@ -11,18 +11,17 @@ GOV = config["govaere"]
 GOV_DIR, GOV_REF = GOV["dir"], GOV["reference"]
 GOV_RUNS_TSV = str(PKG / GOV["runs"])
 GOV_RUNS = pd.read_csv(GOV_RUNS_TSV, sep="\t")["run_accession"].tolist()
-GOVAERE_EXCLUDE = " ".join(GOV.get("exclude") or [])
-GOVAERE_USED = [r for r in GOV_RUNS if r not in GOVAERE_EXCLUDE.split()]
+GOVAERE_EXCLUDE = GOV.get("exclude") or []        # a list: written space-separated into the shell command
+GOVAERE_USED = [r for r in GOV_RUNS if r not in GOVAERE_EXCLUDE]
 SCRIPTS = str(Path(workflow.basedir) / "scripts")
 GENOME = f"{GOV_REF}/GRCh38.primary_assembly.genome.fa"
 
 wildcard_constraints:
     run=r"[SED]RR\d+",
-    w=r"\d+",
-
 
 
 rule govaere:
+    """All CRAMs (target `govaere`), without the downstream steps."""
     input: expand(f"{GOV_DIR}/cram/{{run}}.ok", run=GOV_RUNS)
 
 

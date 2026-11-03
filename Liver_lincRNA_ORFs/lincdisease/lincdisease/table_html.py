@@ -82,7 +82,7 @@ COLUMNS = [
     ("D1 chronic detail", "parent_driven", "Parent-driven", "bool",
      "signal follows a disease-associated parent; statistic re-computed with the parent as covariate"),
 
-    ("D2 detail", "HR_OS", "HR OS", "num", "hazard ratio per SD of expression, overall survival (age, stage adjusted)"),
+    ("D2 detail", "HR_OS", "HR OS", "num", "hazard ratio per SD of expression, overall survival (adjusted for age, stage, log size factor)"),
     ("D2 detail", "fdr_OS", "FDR OS", "p", ""),
     ("D2 detail", "HR_PFI", "HR PFI", "num", "progression-free interval"),
     ("D2 detail", "fdr_PFI", "FDR PFI", "p", ""),
@@ -193,7 +193,7 @@ INDEX = [
         ("M2", "Translation-coupled RNA regulation: NMD substrate, measured NMD sensitivity."),
         ("M3", "Cis-regulation of a neighbour: divergent/antisense position, excess co-expression with the nearest "
                "coding gene, nuclear enrichment, enhancer-like chromatin, low polysome association."),
-        ("M4", "Trans-acting nuclear RNA: nuclear enrichment, abundance, binding by nuclear RBPs, no cis signature."),
+        ("M4", "Trans-acting nuclear RNA: nuclear enrichment, abundance, binding by nuclear RBPs."),
         ("M5", "Trans-acting cytoplasmic RNA: cytoplasmic enrichment, binding by cytoplasmic RBPs."),
         ("M6", "Small-RNA host: snoRNA, scaRNA or miRNA genes in the locus."),
         ("Scores and dominance", "Class score = mean of its feature percentiles (absolute evidence; classes are "
@@ -211,18 +211,17 @@ def rows(orfs, support, mechanism, disease, peptides, hla, min_screen=1):
     t = t.join(support.set_index("orf_id"), how="left", suffixes=("", "_support"))
     t = t.join(mechanism.set_index("orf_id")[[c for c in mechanism.columns if c.startswith("pct_") and c not in t]])
     t = t.join(peptides[["n_specific_peptides", "n_hla_specific"]]).join(hla[["hla_any_n_binders"]])
-    locus_cols = [c for c in ("stat_D3", "cn_rho", "cn_fdr", "cn_gain_freq", "cn_loss_freq")
-                  if c in disease]
-    t = t.join(disease[locus_cols], on="locus_id")
+    locus_cols = [c for c in ("stat_D3", "cn_rho", "cn_fdr", "cn_gain_freq", "cn_loss_freq") if c in disease]
+    t = t.join(disease[locus_cols], on="locus_id").copy()          # copy: the joins leave a fragmented frame
     cand = t["is_candidate"].astype(bool)
     screen = t["crispr_screen_value"].ge(min_screen)
-    t = t[cand | screen].copy()
-    t["set"] = np.where(cand[t.index] & screen[t.index], "both", np.where(cand[t.index], "candidate", "screen"))
-    return t.sort_values(["hcc_score"], ascending=False)
+    t["set"] = np.select([cand & screen, cand], ["both", "candidate"], "screen")
+    return t[cand | screen].sort_values("hcc_score", ascending=False)
 
 
 def _value(v, kind):
-    if v is None or (isinstance(v, float) and np.isnan(v)) or (not isinstance(v, str) and pd.isna(v)):
+    """A table value as JSON for the page: None when missing, else bool / float / str by column kind."""
+    if not isinstance(v, str) and pd.isna(v):
         return None
     if kind == "bool":
         return bool(v) if not isinstance(v, str) else v == "True"
@@ -235,6 +234,7 @@ def _value(v, kind):
 
 
 def build(table, title="lincdisease: candidate and screen-supported ORFs", note=""):
+    """The HTML page: COLUMNS present in `table` (rows()), the INDEX and the summary line filled into TEMPLATE."""
     cols = [c for c in COLUMNS if c[1] in table.columns]
     data = [[_value(r[c[1]], c[3]) for c in cols] for _, r in table.iterrows()]
     meta = [{"group": g, "col": c, "label": lab, "kind": k, "desc": d} for g, c, lab, k, d in cols]

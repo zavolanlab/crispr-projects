@@ -72,36 +72,29 @@ def qc_flags(orfs, segdups=None, false_dups=None, homology=None, quantifiable=No
     """
     f = pd.DataFrame(index=orfs.index)
     f["orf_id"] = orfs["orf_id"]
-    if segdups is not None and len(segdups):
-        f["segdup_fracMatch"] = interval_overlap_max(orfs, segdups, "fracMatch")
-    else:
-        f["segdup_fracMatch"] = np.nan
-    if false_dups is not None and len(false_dups):
-        fd = false_dups.assign(one=1.0)
-        f["grch38_false_dup"] = interval_overlap_max(orfs, fd, "one").eq(1.0)
-    else:
-        f["grch38_false_dup"] = False
+    has = lambda table: table is not None and len(table) > 0
+    f["segdup_fracMatch"] = interval_overlap_max(orfs, segdups, "fracMatch") if has(segdups) else np.nan
+    f["grch38_false_dup"] = (interval_overlap_max(orfs, false_dups.assign(one=1.0), "one").eq(1.0)
+                             if has(false_dups) else False)
     f["in_duplication"] = f["segdup_fracMatch"].notna() | f["grch38_false_dup"]
 
-    if homology is not None and len(homology):
+    if has(homology):
         h = homology.set_index("orf_id")
         f["homolog_parent"] = orfs["orf_id"].map(h["parent"])
         f["homolog_pident"] = orfs["orf_id"].map(h["pident"]).astype(float)
         f["homolog_qcov"] = orfs["orf_id"].map(h["qcov"]).astype(float)
     else:
-        f["homolog_parent"] = np.nan
-        f["homolog_pident"] = np.nan
-        f["homolog_qcov"] = np.nan
+        f[["homolog_parent", "homolog_pident", "homolog_qcov"]] = np.nan
     f["protein_homolog"] = f["homolog_parent"].notna()
 
-    f["antisense_to_coding"] = _nonempty(orfs["orf_antisense_to_CDS"]) | _nonempty(orfs["antisense_coding_exon_overlap"])
+    f["antisense_to_coding"] = (_nonempty(orfs["orf_antisense_to_CDS"])
+                                | _nonempty(orfs["antisense_coding_exon_overlap"]))
     f["small_RNA_overlap"] = _nonempty(orfs["orf_overlaps_small_RNA"])
     f["multimapper_dominated"] = _as_bool(orfs["resolved_multimapper_dominated"])
-    f["coding_gene_extension"] = _nonempty(orfs["possible_3UTR_extension_of"]) | _nonempty(orfs["possible_5prime_extension_of"])
-    if quantifiable is not None:
-        f["tcga_quantifiable"] = orfs["orf_id"].map(quantifiable).fillna(False).astype(bool)
-    else:
-        f["tcga_quantifiable"] = np.nan
+    f["coding_gene_extension"] = (_nonempty(orfs["possible_3UTR_extension_of"])
+                                  | _nonempty(orfs["possible_5prime_extension_of"]))
+    f["tcga_quantifiable"] = (orfs["orf_id"].map(quantifiable).fillna(False).astype(bool) if quantifiable is not None
+                              else np.nan)
     return f
 
 

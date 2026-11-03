@@ -4,8 +4,8 @@ D4 germline genetics (LOGIC.md, Step 3): GWAS Catalog associations with liver tr
 Liver traits are whitelisted by MAPPED_TRAIT (EFO labels): liver diseases (HCC, MASLD, fibrosis, cirrhosis,
 alcoholic liver disease, viral hepatitis, ...) and the liver-enzyme traits ALT, AST and GGT. The LD window of
 a locus is approximated by its genomic span +- `flank` (default 50 kb). Statistic D4 = the largest
--log10(p) of a whitelisted association in the window (0 without one), reported separately for disease and
-enzyme traits.
+-log10(p) of a whitelisted association in the window (0 without one). Its parts for the summary scores:
+D4_hcc (HCC traits) and D4_chronic (the other liver disease traits and the liver enzymes).
 """
 import zipfile
 
@@ -51,26 +51,28 @@ def read_liver_associations(zip_path):
 
 def d4(spans, assoc, flank=50_000):
     """`spans`: DataFrame index feature_id with chrom/start0/end1. Max -log10 p in span +- flank per trait class."""
+    def max_mlog10p(w, sel):
+        m = w.loc[sel, "mlog10p"]
+        return float(m.max()) if len(m) else 0.0
+
     rows = []
     by_chrom = {c: g.sort_values("pos") for c, g in assoc.groupby("chrom")}
     for fid, r in spans.iterrows():
         g = by_chrom.get(r["chrom"])
         rec = {"feature_id": fid, "gwas_disease_max": 0.0, "gwas_hcc_max": 0.0, "gwas_chronic_max": 0.0,
-               "gwas_enzyme_max": 0.0, "gwas_n": 0,
-               "gwas_top_trait": "", "gwas_top_snp": ""}
+               "gwas_enzyme_max": 0.0, "gwas_n": 0, "gwas_top_trait": "", "gwas_top_snp": ""}
         if g is not None:
             lo, hi = r["start0"] - flank, r["end1"] + flank
             pos = g["pos"].to_numpy()
             w = g.iloc[np.searchsorted(pos, lo, "left"):np.searchsorted(pos, hi, "right")]
             if len(w):
-                rec["gwas_n"] = len(w)
-                for cls in ("disease", "enzyme"):
-                    m = w.loc[w["trait_class"] == cls, "mlog10p"]
-                    rec[f"gwas_{cls}_max"] = float(m.max()) if len(m) else 0.0
                 hcc = w["trait"].isin(HCC_TRAITS)
-                for name, sel in (("hcc", hcc), ("chronic", (w["trait_class"] == "disease") & ~hcc)):
-                    m = w.loc[sel, "mlog10p"]
-                    rec[f"gwas_{name}_max"] = float(m.max()) if len(m) else 0.0
+                disease = w["trait_class"] == "disease"
+                rec["gwas_n"] = len(w)
+                rec["gwas_disease_max"] = max_mlog10p(w, disease)
+                rec["gwas_enzyme_max"] = max_mlog10p(w, w["trait_class"] == "enzyme")
+                rec["gwas_hcc_max"] = max_mlog10p(w, hcc)
+                rec["gwas_chronic_max"] = max_mlog10p(w, disease & ~hcc)
                 top = w.sort_values("mlog10p").iloc[-1]
                 rec["gwas_top_trait"], rec["gwas_top_snp"] = top["trait"], top["snp"]
         rows.append(rec)

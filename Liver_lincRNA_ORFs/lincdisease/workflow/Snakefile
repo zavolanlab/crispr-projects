@@ -46,15 +46,16 @@ def _imports(module):
 
 
 def src(*modules):
-    """Files of the lincdisease modules a step uses, with everything they import, the command-line driver
-    (__main__.py) and the input readers (inputs, resources): an edit of any of them reruns the step."""
-    todo, seen = ["__main__", "inputs", "resources", *modules], set()
+    """Files of the lincdisease modules a step uses, with everything they import, the input readers (inputs,
+    resources) and the command-line driver (__main__.py, whose own imports are not followed: it imports every
+    module): an edit of any of them reruns the step."""
+    todo, seen = ["inputs", "resources", *modules], set()
     while todo:
         m = todo.pop()
         if m not in seen:
             seen.add(m)
             todo.extend(_imports(m) - seen)
-    return sorted(str(MODULES / f"{m}.py") for m in seen if m != "__main__") + [str(MODULES / "__main__.py")]
+    return sorted(str(MODULES / f"{m}.py") for m in seen) + [str(MODULES / "__main__.py")]
 
 
 def mem(gb):
@@ -74,6 +75,9 @@ QUANT = expand("flags/quant.{w}.done", w=range(N_QUANT))
 QUANT_SRA = expand("flags/quant_sra.{w}.done", w=range(N_QUANT_SRA))
 QUANT_NMD = expand("flags/quant_nmd.{w}.done", w=range(N_QUANT_SRA))
 QUANT_HCC = expand("flags/quant_hcc.{w}.done", w=range(N_QUANT_SRA))
+
+wildcard_constraints:
+    w=r"\d+",           # quant worker
 
 # login node (network); everything else is a Slurm job
 localrules: all, fetch, manifest, quant, chronic_manifest, quant_sra, nmd_manifest, quant_nmd, hcc_manifest, quant_hcc,
@@ -152,9 +156,24 @@ rule nmd:
     shell: "{LD} nmd --data-dir {DATA} > {log} 2>&1"
 
 
+rule hcc_manifest:
+    """Runs of the independent HCC cohorts (tumour + adjacent normal of the same patients) in recount3."""
+    input: NEEDS_FETCH
+    output: "quant_hcc/samples.tsv"
+    log: "logs/hcc_manifest.log"
+    shell: "{LD} hcc --manifest > {log} 2>&1"
+
+
+rule quant_hcc:
+    input: ancient("quant/regions.tsv"), ancient("quant_hcc/samples.tsv")
+    output: touch("flags/quant_hcc.{w}.done")
+    log: "logs/quant_hcc.{w}.log"
+    shell: "{LD} quant --sample-set quant_hcc --worker {wildcards.w} --n-workers {N_QUANT_SRA} --scratch quant_hcc > {log} 2>&1"
+
+
 rule literature:
     """Europe PMC counts (cached per query in data_dir/europepmc_counts.json)."""
-    input: ORFS, NEEDS_FETCH, src("literature")
+    input: ORFS, NEEDS_FETCH, src("literature", "controls")
     output: "D5.literature.tsv"
     log: "logs/literature.log"
     shell: "{LD} literature {COMMON} --threads 4 > {log} 2>&1"
@@ -172,7 +191,7 @@ rule scaling:
 
 
 rule regions:
-    input: ORFS, LINC["gtf"], NEEDS_FETCH, src("quant", "controls", "inputs")
+    input: ORFS, LINC["gtf"], NEEDS_FETCH, src("quant", "controls")
     output: "quant/regions.tsv", "quant/features.tsv"
     resources: mem_mb=mem(16), runtime=60
     log: "logs/regions.log"
@@ -180,7 +199,7 @@ rule regions:
 
 
 rule homology:
-    input: ORFS, NEEDS_FETCH, src("homology")
+    input: ORFS, NEEDS_FETCH, src("homology", "quant")
     output: "homology.orfs.tsv"
     threads: 8
     resources: mem_mb=mem(24), runtime=120
@@ -208,7 +227,7 @@ rule peptide:
 
 
 rule support:
-    input: ORFS, LINC["gtf"], "quant/regions.tsv", config["phylop"], NEEDS_FETCH, src("peptide", "screens")
+    input: ORFS, LINC["gtf"], "quant/regions.tsv", config["phylop"], NEEDS_FETCH, src("peptide", "screens", "quant")
     output: "support.orfs.tsv"
     threads: 4
     resources: mem_mb=mem(16), runtime=120
@@ -217,7 +236,7 @@ rule support:
 
 
 rule genetics:
-    input: ORFS, "quant/features.tsv", NEEDS_FETCH, src("genetics", "eqtl")
+    input: ORFS, "quant/features.tsv", NEEDS_FETCH, src("genetics", "eqtl", "controls")
     output: "D4.gwas.tsv", "D4.eqtl.tsv"
     resources: mem_mb=mem(32), runtime=60
     log: "logs/genetics.log"
@@ -232,21 +251,6 @@ rule somatic:
     shell: "{LD} somatic {COMMON} > {log} 2>&1"
 
 
-rule hcc_manifest:     # local rule (network)
-    """Runs of the independent HCC cohorts (tumour + adjacent normal of the same patients) in recount3."""
-    input: NEEDS_FETCH
-    output: "quant_hcc/samples.tsv"
-    log: "logs/hcc_manifest.log"
-    shell: "{LD} hcc --manifest > {log} 2>&1"
-
-
-rule quant_hcc:
-    input: ancient("quant/regions.tsv"), ancient("quant_hcc/samples.tsv")
-    output: touch("flags/quant_hcc.{w}.done")
-    log: "logs/quant_hcc.{w}.log"
-    shell: "{LD} quant --sample-set quant_hcc --worker {wildcards.w} --n-workers {N_QUANT_SRA} --scratch quant_hcc > {log} 2>&1"
-
-
 rule hcc:
     input: QUANT_HCC, "quant_hcc/samples.tsv", EXPRESSION, NEEDS_FETCH, src("hcc")
     output: "D1.hcc_replication.tsv", "quant_hcc/size_factors.tsv"
@@ -256,7 +260,7 @@ rule hcc:
 
 
 rule encode:
-    input: ORFS, LINC["gtf"], LINC["tsv"], NEEDS_FETCH, src("encode", "eclip", "chromatin")
+    input: ORFS, LINC["gtf"], LINC["tsv"], NEEDS_FETCH, src("encode", "eclip", "chromatin", "controls")
     output: "encode.loci.tsv", "eclip.loci.tsv", "chromatin.loci.tsv"
     resources: mem_mb=mem(32), runtime=120
     log: "logs/encode.log"
@@ -277,9 +281,9 @@ rule chronic:
 
 
 rule mechanism:
-    input: ORFS, QUANT, "quant/samples.tsv", "quant/size_factors.tsv", EXPRESSION, "qc.orfs.tsv", "peptides.orfs.tsv", "encode.loci.tsv", "eclip.loci.tsv",
-           "chromatin.loci.tsv", "nmd.loci.tsv", "peptide_features.orfs.tsv", "support.orfs.tsv", LINC["gtf"],
-           LINC["tsv"], NEEDS_FETCH, src("mechanism", "expression")
+    input: ORFS, LINC["gtf"], LINC["tsv"], QUANT, "quant/samples.tsv", "quant/size_factors.tsv", EXPRESSION,
+           "qc.orfs.tsv", "peptides.orfs.tsv", "peptide_features.orfs.tsv", "support.orfs.tsv", "nmd.loci.tsv",
+           "encode.loci.tsv", "eclip.loci.tsv", "chromatin.loci.tsv", NEEDS_FETCH, src("mechanism", "expression", "disease")
     output: "mechanism.orfs.tsv", "coexpression.loci.tsv"
     resources: mem_mb=mem(48), runtime=120
     log: "logs/mechanism.log"
@@ -287,9 +291,9 @@ rule mechanism:
 
 
 rule disease:
-    input: ORFS, QUANT, "quant/samples.tsv", "quant/size_factors.tsv", EXPRESSION, "D1.chronic.tsv", "D1.hcc_replication.tsv", "D3.somatic.tsv", "D4.gwas.tsv", "D4.eqtl.tsv",
-           "D5.literature.tsv",
-           NEEDS_FETCH, src("disease", "integrate", "hcc", "expression")
+    input: ORFS, QUANT, "quant/samples.tsv", "quant/size_factors.tsv", EXPRESSION, "D1.chronic.tsv",
+           "D1.hcc_replication.tsv", "D3.somatic.tsv", "D4.gwas.tsv", "D4.eqtl.tsv", "D5.literature.tsv", NEEDS_FETCH,
+           src("disease", "integrate", "hcc", "expression")
     output: "disease.loci.tsv"
     resources: mem_mb=mem(48), runtime=120
     log: "logs/disease.log"
@@ -297,7 +301,7 @@ rule disease:
 
 
 rule weights:
-    input: "disease.loci.tsv", src("weights")    # weights imports integrate and scoring
+    input: "disease.loci.tsv", src("weights")
     output: "disease_score_fitted.tsv", "weights.tsv"
     resources: mem_mb=mem(8), runtime=30
     log: "logs/weights.log"

@@ -17,6 +17,7 @@ ACTIONABILITY = ["tumour_specificity", "n_hla_specific", "hla_binding"]
 
 
 def actionability(orfs, disease_loci, peptides, hla_table=None):
+    """Per ORF: the ACTIONABILITY parts (act_), their percentiles (act_pct_) and the composite score."""
     f = pd.DataFrame(index=orfs.index)
     f["tumour_specificity"] = orfs["locus_id"].map(disease_loci["tumour_specificity"]).to_numpy()
     f["n_hla_specific"] = orfs["orf_id"].map(peptides["n_hla_specific"]).fillna(0).to_numpy()
@@ -30,6 +31,7 @@ def actionability(orfs, disease_loci, peptides, hla_table=None):
 
 
 def orf_table(orfs, qc_table, disease_loci, mech, act):
+    """lincdisease.orfs.tsv: ORF identity, QC, the locus' disease columns, actionability and mechanism scores."""
     keep_disease = ["disease_score", "disease_coverage", "disease_score_noD5", "disease_direction",
                     "hcc_score", "hcc_coverage", "hcc_direction", "chronic_score", "chronic_coverage",
                     "chronic_direction",
@@ -81,27 +83,27 @@ def _row(feature, score, value, expectation, passed):
 def control_report(disease_loci, mech_by_locus_name, hla_control=None):
     """Check the control expectations of LOGIC.md Step 5 that the current inputs can evaluate."""
     d = disease_loci
-    g = lambda gene, col: d.loc[f"ctrl:{gene}", col] if f"ctrl:{gene}" in d.index else np.nan
-    rows = [
-        _row("HULC", "D1_HCC", f"log2FC {g('HULC', 'log2FC_paired'):.2f}, FDR {g('HULC', 'fdr_paired'):.2g}",
-             "up in tumour, FDR < 0.05", g("HULC", "log2FC_paired") > 0 and g("HULC", "fdr_paired") < 0.05),
-        _row("LINC00261", "D1_HCC",
-             f"log2FC {g('LINC00261', 'log2FC_paired'):.2f}, FDR {g('LINC00261', 'fdr_paired'):.2g}",
-             "down in tumour, FDR < 0.05", g("LINC00261", "log2FC_paired") < 0 and g("LINC00261", "fdr_paired") < 0.05),
-        _row("HULC", "D1_HCC replication",
-             f"r {g('HULC', 'hcc_rep_r'):.2f}, FDR {g('HULC', 'hcc_rep_fdr'):.2g}, {g('HULC', 'hcc_rep_pairs'):.0f} pairs",
-             "up in tumour in the independent cohorts, FDR < 0.05",
-             g("HULC", "hcc_rep_r") > 0 and g("HULC", "hcc_rep_fdr") < 0.05),
-        _row("LINC00261", "D1_HCC replication",
-             f"r {g('LINC00261', 'hcc_rep_r'):.2f}, FDR {g('LINC00261', 'hcc_rep_fdr'):.2g}, "
-             f"{g('LINC00261', 'hcc_rep_pairs'):.0f} pairs",
-             "down in tumour in the independent cohorts, FDR < 0.05",
-             g("LINC00261", "hcc_rep_r") < 0 and g("LINC00261", "hcc_rep_fdr") < 0.05),
-        _row("COL1A1", "D1_chronic", f"rho_fibrosis {g('COL1A1', 'hoang_r'):.2f}, p {g('COL1A1', 'hoang_p'):.2g}, "
-                                     f"D1_chronic {g('COL1A1', 'stat_D1_chronic'):.2f}",
-             "positive association with fibrosis stage (rho > 0, p < 0.05)",
-             g("COL1A1", "hoang_r") > 0 and g("COL1A1", "hoang_p") < 0.05),
-    ]
+
+    def g(gene, col):
+        return d.loc[f"ctrl:{gene}", col] if f"ctrl:{gene}" in d.index else np.nan
+
+    d1_hcc = (("HULC", 1, "up"), ("LINC00261", -1, "down"))       # gene, sign of the expected change
+    rows = []
+    for gene, sign, word in d1_hcc:
+        rows.append(_row(gene, "D1_HCC", f"log2FC {g(gene, 'log2FC_paired'):.2f}, FDR {g(gene, 'fdr_paired'):.2g}",
+                         f"{word} in tumour, FDR < 0.05",
+                         sign * g(gene, "log2FC_paired") > 0 and g(gene, "fdr_paired") < 0.05))
+    for gene, sign, word in d1_hcc:
+        rows.append(_row(gene, "D1_HCC replication",
+                         f"r {g(gene, 'hcc_rep_r'):.2f}, FDR {g(gene, 'hcc_rep_fdr'):.2g}, "
+                         f"{g(gene, 'hcc_rep_pairs'):.0f} pairs",
+                         f"{word} in tumour in the independent cohorts, FDR < 0.05",
+                         sign * g(gene, "hcc_rep_r") > 0 and g(gene, "hcc_rep_fdr") < 0.05))
+    rows.append(_row("COL1A1", "D1_chronic",
+                     f"rho_fibrosis {g('COL1A1', 'hoang_r'):.2f}, p {g('COL1A1', 'hoang_p'):.2g}, "
+                     f"D1_chronic {g('COL1A1', 'stat_D1_chronic'):.2f}",
+                     "positive association with fibrosis stage (rho > 0, p < 0.05)",
+                     g("COL1A1", "hoang_r") > 0 and g("COL1A1", "hoang_p") < 0.05))
     for gene in ("BIRC5", "CYTOR"):
         rows.append(_row(gene, "D2", f"HR_OS {g(gene, 'HR_OS'):.2f}, FDR {g(gene, 'fdr_OS'):.2g}", "HR > 1",
                          g(gene, "HR_OS") > 1))
@@ -138,18 +140,20 @@ def control_report(disease_loci, mech_by_locus_name, hla_control=None):
                                                   f"pct {h['presentation_percentile']:.2f}",
                          "predicted binder (presentation percentile <= 2)", h["presentation_percentile"] <= 2))
 
+    # mechanism controls: the expected class is the top class by standardized score (M2: a high class score)
     expected = {"M1": ["MTLN", "SPAAR"], "M2": ["GAS5", "ZFAS1"], "M3": ["HNF1A-AS1", "LINC00261"],
                 "M4": ["MALAT1", "NEAT1"], "M5": ["NORAD"], "M6": ["SNHG1", "MIR22HG"]}
     classes = [f"M{i}" for i in range(1, 7)]
     for cls, genes in expected.items():
+        expectation = "high (>= 0.6)" if cls == "M2" else "top class"
         for gene in genes:
             if gene not in mech_by_locus_name.index:
-                rows.append(_row(gene, cls, "not a lincorfz locus", "top class" if cls != "M2" else "high", None))
+                rows.append(_row(gene, cls, "not a lincorfz locus", "high" if cls == "M2" else "top class", None))
                 continue
             sc = mech_by_locus_name.loc[gene, [f"{c}_score" for c in classes]].astype(float)
             z = mech_by_locus_name.loc[gene, [f"{c}_z" for c in classes]].astype(float)
-            top = classes[int(np.nanargmax(z.to_numpy()))]       # classes are compared on standardized scores
+            top = classes[int(np.nanargmax(z.to_numpy()))]
             val = f"{cls} {sc[f'{cls}_score']:.2f} (z {z[f'{cls}_z']:.2f}); top {top}"
             ok = sc[f"{cls}_score"] >= 0.6 if cls == "M2" else top == cls
-            rows.append(_row(gene, cls, val, "top class" if cls != "M2" else "high (>= 0.6)", ok))
+            rows.append(_row(gene, cls, val, expectation, ok))
     return pd.DataFrame(rows)

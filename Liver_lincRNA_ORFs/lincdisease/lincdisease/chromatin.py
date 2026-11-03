@@ -53,6 +53,7 @@ def dominant_tss(lincrna_tx, gencode_gtf, control_genes):
 
 
 def mean_signal(bw, tss, flank=FLANK):
+    """Mean bigWig signal over TSS +- flank per feature (0 where the bigWig has no data; NaN off its chromosomes)."""
     chroms = bw.chroms()
     out = np.full(len(tss), np.nan)
     for i, (c, p) in enumerate(zip(tss["chrom"], tss["tss0"])):
@@ -75,6 +76,7 @@ def scores(sig):
 
 
 def features(tss, data_dir, flank=FLANK):
+    """`tss` (dominant_tss) joined with the mark fold changes (fc_) and the scores of the module docstring."""
     sig = {}
     for mark, (_, acc) in BIGWIGS.items():
         bw = pyBigWig.open(os.path.join(data_dir, f"{acc}.bigWig"))

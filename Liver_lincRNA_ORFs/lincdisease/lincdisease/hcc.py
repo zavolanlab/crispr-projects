@@ -11,9 +11,10 @@ Cohorts (patient and tissue from the recount3 SRA metadata):
   GSE56545  SRP040998: HCC patients after liver transplantation, tumour and adjacent normal (single-end)
 
 ncov is divided by median-of-ratios size factors of the recount3 gene sums, per cohort (expression.py: tumours lose
-the hepatocyte transcripts that dominate liver RNA), and the runs of one sample are averaged. Per cohort and feature: matched-pairs rank-biserial correlation r of
-log2(ncov + pseudocount), tumour minus normal of the same patient, and Wilcoxon signed-rank p (as D1 HCC paired);
-features detected (ncov > 0) in < MIN_DETECTED of the cohort's samples are not tested there. Combined over cohorts:
+the hepatocyte transcripts that dominate liver RNA), and the runs of one sample are averaged. Per cohort and
+feature: matched-pairs rank-biserial correlation r of log2(ncov + pseudocount), tumour minus normal of the same
+patient, and Wilcoxon signed-rank p (as D1 HCC paired); features detected (ncov > 0) in < MIN_DETECTED of the
+cohort's samples are not tested there. Combined over cohorts:
 hcc_rep_r = mean r weighted by the number of pairs, Stouffer z (signed z from the two-sided p, weights sqrt(pairs)),
 p and BH-FDR over features. `hcc_replicated` (replicated): same sign as D1 HCC and combined FDR < 0.05; missing where
 no cohort tested the feature.
@@ -22,11 +23,10 @@ import re
 
 import numpy as np
 import pandas as pd
-from scipy import stats
 
 from . import expression, quant
-from .chronic import parse_attributes
-from .disease import bh, paired_rank_biserial
+from .disease import bh, paired_rank_biserial, stouffer, weighted_mean
+from .quant import parse_attributes
 
 COHORTS = {"GSE77314": "SRP068976", "GSE77509": "SRP069212", "GSE94660": "SRP099053", "GSE56545": "SRP040998"}
 MIN_DETECTED = 0.2
@@ -82,11 +82,20 @@ def replicated(rep, d1_hcc):
     return (same & (rep["hcc_rep_fdr"] < 0.05)).astype(object).where(rep["hcc_rep_fdr"].notna())
 
 
+def _cohort_pairs(meta, cohort):
+    """Tumour and normal sample (experiment) of each patient of a cohort with both: two aligned Series."""
+    m = meta[meta["cohort"] == cohort]
+    by_tissue = {t: m[m["tissue"] == t].reset_index().drop_duplicates("patient").set_index("patient")["experiment_acc"]
+                 for t in ("tumour", "normal")}
+    patients = by_tissue["tumour"].index.intersection(by_tissue["normal"].index)
+    return by_tissue["tumour"][patients], by_tissue["normal"][patients]
+
+
 def replication(ncov, samples, pseudocount=0.05, min_detected=MIN_DETECTED):
     """
-    ncov: features x runs (quant.normalize, scaled by size_factors); samples: manifest rows (sample_id, cohort, experiment_acc, patient,
-    tissue). Returns per feature <cohort>_r / _p / _pairs and the combined hcc_rep_r, hcc_rep_z, hcc_rep_p,
-    hcc_rep_fdr, hcc_rep_n_cohorts, hcc_rep_pairs.
+    ncov: features x runs (quant.normalize, scaled by size_factors); samples: manifest rows (sample_id, cohort,
+    experiment_acc, patient, tissue). Returns per feature <cohort>_r / _p / _pairs and the combined hcc_rep_r,
+    hcc_rep_z, hcc_rep_p, hcc_rep_fdr, hcc_rep_n_cohorts, hcc_rep_pairs.
     """
     s = samples.set_index("sample_id").loc[ncov.columns]
     per_sample = ncov.T.groupby(s["experiment_acc"]).mean().T          # runs of one sample averaged
@@ -94,32 +103,21 @@ def replication(ncov, samples, pseudocount=0.05, min_detected=MIN_DETECTED):
     e = np.log2(per_sample + pseudocount)
     out = pd.DataFrame(index=ncov.index)
     for cohort in COHORTS:
-        m = meta[meta["cohort"] == cohort]
-        if m.empty:
+        if not (meta["cohort"] == cohort).any():
             continue
-        tum = m[m["tissue"] == "tumour"].reset_index().drop_duplicates("patient").set_index("patient")
-        nor = m[m["tissue"] == "normal"].reset_index().drop_duplicates("patient").set_index("patient")
-        pts = tum.index.intersection(nor.index)
-        diff = (e[tum.loc[pts, "experiment_acc"]].to_numpy() - e[nor.loc[pts, "experiment_acc"]].to_numpy())
-        detected = (per_sample[m.index] > 0).mean(axis=1) >= min_detected
+        tum, nor = _cohort_pairs(meta, cohort)
+        diff = e[tum].to_numpy() - e[nor].to_numpy()
+        detected = (per_sample[meta.index[meta["cohort"] == cohort]] > 0).mean(axis=1) >= min_detected
         res = [paired_rank_biserial(d) if ok else (np.nan, np.nan) for d, ok in zip(diff, detected)]
         out[f"{cohort}_r"] = [r for r, _ in res]
         out[f"{cohort}_p"] = [p for _, p in res]
-        out[f"{cohort}_pairs"] = np.where(detected, len(pts), 0)
+        out[f"{cohort}_pairs"] = np.where(detected, len(tum), 0)
     cohorts = [c for c in COHORTS if f"{c}_r" in out]
-    r = out[[f"{c}_r" for c in cohorts]].to_numpy(float)
-    p = out[[f"{c}_p" for c in cohorts]].to_numpy(float)
-    n = out[[f"{c}_pairs" for c in cohorts]].to_numpy(float)
-    ok = np.isfinite(r) & (n > 0)
-    w = np.where(ok, n, 0)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        out["hcc_rep_r"] = np.where(ok.any(axis=1), (np.where(ok, r, 0) * w).sum(axis=1) / w.sum(axis=1), np.nan)
-        z = np.sign(r) * stats.norm.isf(np.clip(p, 1e-300, 1) / 2)
-        sw = np.sqrt(w)
-        zc = (np.where(ok, z, 0) * sw).sum(axis=1) / np.sqrt((sw ** 2).sum(axis=1))
-    out["hcc_rep_z"] = np.where(ok.any(axis=1), zc, np.nan)
-    out["hcc_rep_p"] = np.where(np.isfinite(out["hcc_rep_z"]), 2 * stats.norm.sf(np.abs(out["hcc_rep_z"])), np.nan)
+    r, p, n = (out[[f"{c}_{x}" for c in cohorts]].to_numpy(float) for x in ("r", "p", "pairs"))
+    ok = np.isfinite(r) & (n > 0)                       # cohorts that tested the feature
+    out["hcc_rep_r"] = weighted_mean(r, n, ok)
+    out["hcc_rep_z"], out["hcc_rep_p"] = stouffer(r, p, n, ok)
     out["hcc_rep_fdr"] = bh(out["hcc_rep_p"])
     out["hcc_rep_n_cohorts"] = ok.sum(axis=1)
-    out["hcc_rep_pairs"] = w.sum(axis=1)
+    out["hcc_rep_pairs"] = np.where(ok, n, 0).sum(axis=1)
     return out

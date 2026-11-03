@@ -60,6 +60,7 @@ def rbp_groups(annotation_xlsx):
 
 
 def localisation_group(loc):
+    """RBP x compartment imaging table (NUCLEAR + CYTOPLASMIC columns, NaN = not imaged) -> rbp_groups' groups."""
     imaged = loc.notna().any(axis=1)
     nuc = loc[NUCLEAR].fillna(0).sum(axis=1) > 0
     cyt = loc[CYTOPLASMIC].fillna(0).sum(axis=1) > 0
@@ -89,8 +90,8 @@ def stranded_regions(lincrna_exons, gencode_exons, loci, control_genes):
     ex = pd.concat([lx, cx], ignore_index=True)[["feature_id", "chrom", "start0", "end1", "strand"]]
     strands = ex.groupby("feature_id")["strand"].first()
     exons = quant.merge_intervals(ex.drop(columns="strand"))
-    own = {lid: {i.split(".")[0] for i in quant._split_ids(r.get("name_source_gene_ids"))
-                 + quant._split_ids(r.get("lncRNA_gene_ids"))} for lid, r in loci.iterrows()}
+    own = {lid: {i.split(".")[0] for i in quant.split_ids(r.get("name_source_gene_ids"))
+                 + quant.split_ids(r.get("lncRNA_gene_ids"))} for lid, r in loci.iterrows()}
     for name in control_genes:
         own["ctrl:" + name] = set(ctrl.loc[ctrl["gene_name"] == name, "gene_id"].str.split(".").str[0])
     g = gencode_exons[["chrom", "start0", "end1", "strand"]].assign(

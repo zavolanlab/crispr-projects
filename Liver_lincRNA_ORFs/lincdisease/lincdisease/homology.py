@@ -94,6 +94,8 @@ def gene_spans(gencode_exons):
 
 def drop_self_hits(hits, orfs, spans):
     """Remove hits whose parent gene overlaps the ORF span (the ORF's own locus); returns (kept, n_self)."""
+    # _row identifies a hit: the merge with the gene spans can repeat it
+    hits = hits.reset_index(drop=True).assign(_row=lambda d: np.arange(len(d)))
     o = orfs.set_index("orf_id")[["chrom", "orf_start0", "orf_end1"]]
     m = hits.join(o, on="qseqid").merge(spans, left_on=["parent", "chrom"], right_on=["gene_name", "chrom"],
                                         how="left")
@@ -101,7 +103,7 @@ def drop_self_hits(hits, orfs, spans):
     self_rows = set(m.loc[is_self, "_row"])
     keep = ~hits["_row"].isin(self_rows)
     n_self = hits.loc[~keep].groupby("qseqid").size()
-    return hits[keep], n_self
+    return hits[keep].drop(columns="_row"), n_self
 
 
 # ---------------------------------------------------------------- per-ORF table
@@ -112,8 +114,7 @@ def homology_table(orfs, hits, spans, max_evalue=1e-5, min_qcov=30.0):
     evalue, bitscore), n_homolog_genes, n_self_hits.
     """
     out = pd.DataFrame(index=pd.Index(orfs["orf_id"], name="orf_id"))
-    h = hits.reset_index(drop=True).assign(_row=lambda d: np.arange(len(d)))
-    h, n_self = drop_self_hits(h, orfs, spans)
+    h, n_self = drop_self_hits(hits, orfs, spans)
     out["n_self_hits"] = n_self.reindex(out.index).fillna(0).astype(int)
     h = h[(h["evalue"] <= max_evalue) & (h["qcovhsp"] >= min_qcov)]
     h = h.sort_values(["qseqid", "bitscore", "pident"], ascending=[True, False, False])
@@ -127,7 +128,6 @@ def homology_table(orfs, hits, spans, max_evalue=1e-5, min_qcov=30.0):
     out["evalue"] = best["evalue"]
     out["bitscore"] = best["bitscore"]
     out["n_homolog_genes"] = h.groupby("qseqid")["parent"].nunique().reindex(out.index).fillna(0).astype(int)
-
     return out
 
 

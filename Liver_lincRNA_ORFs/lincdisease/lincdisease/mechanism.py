@@ -202,10 +202,9 @@ def small_rna_genes(gencode_exons, wgrna):
     snoRNA / scaRNA / miRNA genes of GENCODE and of UCSC wgRna (snoRNABase + miRBase; GENCODE v42 lacks e.g. the
     GAS5 snoRNAs), merged so that a gene present in both counts once: chrom/start0/end1/strand.
     """
-    g = gencode_exons[gencode_exons["gene_type"].isin(SMALL_RNA_TYPES)]
-    g = g.groupby("gene_id").agg(chrom=("chrom", "first"), start0=("start0", "min"), end1=("end1", "max"),
-                                 strand=("strand", "first"))
-    both = pd.concat([g[["chrom", "start0", "end1", "strand"]], wgrna[["chrom", "start0", "end1", "strand"]]])
+    cols = ["chrom", "start0", "end1", "strand"]
+    g = gene_spans(gencode_exons[gencode_exons["gene_type"].isin(SMALL_RNA_TYPES)], "gene_id")
+    both = pd.concat([g[cols], wgrna[cols]])
     merged = quant.merge_intervals(both.rename(columns={"strand": "feature_id"}))
     return merged.rename(columns={"feature_id": "strand"})
 
@@ -239,8 +238,11 @@ def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=No
     def orf_col(c):                      # a column of the lincorfz ORF table
         return pd.to_numeric(orfs[c], errors="coerce")
 
-    def per_locus(table, col):           # a locus-level value copied to the locus' ORFs
-        return orfs["locus_id"].map(table[col]).astype(float).to_numpy() if table is not None else np.nan
+    def per_locus(table, col=None):      # a locus-level value (a Series, or a column of a table) copied to the
+        if table is None:                # locus' ORFs
+            return np.nan
+        values = table if col is None else table[col]
+        return orfs["locus_id"].map(values).astype(float).to_numpy()
 
     def per_orf(table, col):             # a column of an ORF table indexed by orf_id
         return table.reindex(orfs["orf_id"])[col].astype(float).to_numpy()
@@ -270,9 +272,9 @@ def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=No
     f["m2_nmd_sensitivity"] = per_locus(nmd, "nmd_log2fc")
 
     # M3 cis regulation
-    f["m3_neighbour_position"] = orfs["locus_id"].map(position).to_numpy()
+    f["m3_neighbour_position"] = per_locus(position)
     f["m3_low_polysome"] = -orf_col("MRL_pct_vs_mRNA")
-    f["m3_coexpression"] = orfs["locus_id"].map(coexpr).to_numpy() if coexpr is not None else np.nan
+    f["m3_coexpression"] = per_locus(coexpr)
     f["m3_nuclear"] = nuclear
     f["m3_enhancer_chromatin"] = per_locus(chromatin, "enhancer_score")
 
@@ -285,11 +287,13 @@ def features(orfs, qc_table, peptides, stop_dist, position, small_rna, coexpr=No
     expressed = (2 ** orf_col("log2TPM_HepG2") >= ECLIP_MIN_TPM).to_numpy()
     for feat, col in (("m4_eclip_nuclear", "eclip_nuclear_enrichment"),
                       ("m5_eclip_cytoplasmic", "eclip_cytoplasmic_enrichment")):
-        f[feat] = np.where(expressed, np.nan_to_num(per_locus(eclip, col), nan=0.0), np.nan) if eclip is not None \
-            else np.nan
+        if eclip is None:
+            f[feat] = np.nan
+        else:
+            f[feat] = np.where(expressed, np.nan_to_num(per_locus(eclip, col), nan=0.0), np.nan)
 
     # M6 small-RNA host
-    f["m6_small_rna_host"] = orfs["locus_id"].map(small_rna).to_numpy()
+    f["m6_small_rna_host"] = per_locus(small_rna)
     return f
 
 
