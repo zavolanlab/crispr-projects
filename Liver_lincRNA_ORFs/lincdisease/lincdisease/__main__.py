@@ -525,9 +525,10 @@ def cmd_disease(args):
     d4q = pd.read_csv(os.path.join(args.out_dir, "D4.eqtl.tsv"), sep="\t", index_col=0)
     d4q["D4_eqtl_supported"] = d4q["eqtl_gwas_mlog10p"] > 0
     rep = pd.read_csv(os.path.join(args.out_dir, "D1.hcc_replication.tsv"), sep="\t", index_col=0)
-    # replicated: same direction as D1 HCC and combined FDR < 0.05 in the independent cohorts (reported, not scored)
+    # replicated: same direction as D1 HCC and combined FDR < 0.05 in the independent cohorts (reported, not scored);
+    # missing where no replication cohort tested the feature
     rep["hcc_replicated"] = ((np.sign(rep["hcc_rep_r"]) == np.sign(d1["D1_HCC"].reindex(rep.index)))
-                             & (rep["hcc_rep_fdr"] < 0.05))
+                             & (rep["hcc_rep_fdr"] < 0.05)).astype(object).where(rep["hcc_rep_fdr"].notna())
 
     stats = pd.DataFrame(index=feats.index)
     stats["D1_HCC"] = d1["D1_HCC"]
