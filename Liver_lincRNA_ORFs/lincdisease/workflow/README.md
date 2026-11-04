@@ -123,3 +123,5 @@ for env in lincdisease lincdisease_peptide snakemake; do
 done
 <root>/conda_envs/lincdisease_peptide/bin/pip install --no-deps -r E/lincdisease_peptide.pip.txt
 ```
+
+If the site PyPI proxy refuses the pip install (HTTP 403), add `--index-url https://pypi.org/simple`.
