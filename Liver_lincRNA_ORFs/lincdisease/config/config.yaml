@@ -1,13 +1,14 @@
 # Paths of the lincdisease workflow, relative to the root directory given at run time
-# (run.sh --root DIR; default: the current directory). Inputs that live elsewhere are linked into <root>/inputs/
-# (see workflow/README.md). Absolute paths are also accepted.
+# (run.sh --root DIR; default: the current directory). The root is the lincorfz output directory ($OUT of
+# ../README.md), so the lincorfz results are read in place (see workflow/README.md). Absolute paths are also accepted.
 
 # lincorfz run that the annotation starts from (read only)
-results_dir: inputs/lincorfz_results
-candidates: inputs/lincorfz_results/final/lincORFs.subselection.ranked.tsv.csv
+results_dir: runs/v2/results
+candidates: runs/v2/results/final/lincORFs.subselection.ranked.tsv.csv
 # proteomics/ and peptidomics/ results of the lincorfz notebook
-peptides_dir: inputs/lincorfz_peptides
-phylop: inputs/PhyloP100way.bw
+peptides_dir: .
+# shared Liver_projects data, next to wf_runs/
+phylop: ../../external_data/conservation_and_mutations/PhyloP100way.bw
 
 # outputs (the workflow runs in this directory) and the download cache
 out_dir: disease_mechanism/v2
@@ -28,7 +29,7 @@ html:
 
 govaere:
   runs: config/govaere_runs.tsv            # ENA run table of PRJNA558102 (relative to the lincdisease directory)
-  dir: external_data/govaere2020
+  dir: ../../external_data/govaere2020        # shared Liver_projects data, next to wf_runs/
   reference: lincdisease_data/reference
   max_fastq_gb: 60                         # downloads wait while this much FASTQ is on disk
   modules: STAR/2.7.11b-GCC-13.3.0 SAMtools/1.21-GCC-13.3.0

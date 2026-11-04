@@ -17,7 +17,7 @@ PKG = Path(workflow.basedir).parent          # the lincdisease directory (packag
 configfile: str(PKG / "config" / "config.yaml")
 
 # config paths are relative to the root directory (run.sh passes --config root=DIR). Inputs are resolved through
-# their links (<root>/inputs/...), so the recorded input files do not depend on where the links live.
+# symbolic links, so the recorded input files do not depend on where a link lives.
 if "root" not in config:
     raise WorkflowError("no root directory: start the workflow with run.sh (or pass --config root=DIR)")
 ROOT = os.path.abspath(config["root"])
@@ -26,7 +26,7 @@ for key in ("results_dir", "candidates", "peptides_dir", "phylop"):
 for key in ("out_dir", "data_dir", "python", "diamond", "tool_env"):
     config[key] = os.path.join(ROOT, config[key])
 for key in ("dir", "reference"):
-    config["govaere"][key] = os.path.join(ROOT, config["govaere"][key])
+    config["govaere"][key] = os.path.abspath(os.path.join(ROOT, config["govaere"][key]))   # the default dir has ..
 workdir: config["out_dir"]
 
 RESULTS, CANDIDATES, DATA = config["results_dir"], config["candidates"], config["data_dir"]

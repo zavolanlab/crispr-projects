@@ -6,30 +6,25 @@ to know Snakemake to use it.
 
 ## Root directory and inputs
 All paths in `../config/config.yaml` are relative to a **root directory**, given at run time with
-`run.sh --root DIR` or taken from the current directory. No paths are stored in git. Expected layout:
+`run.sh --root DIR` or taken from the current directory. No paths are stored in git. The root is the lincorfz
+output directory (`$OUT` of `../../README.md`), so the lincorfz results are read in place; the workflow adds its
+own directories next to them:
 
 ```
-<root>/
-  inputs/lincorfz_results     -> lincorfz results/ (ranked ORFs, lincRNA transcripts, final/ candidate table)
-  inputs/lincorfz_peptides    -> directory with proteomics/ and peptidomics/ from the lincorfz notebook
-  inputs/PhyloP100way.bw      -> PhyloP100way bigWig
-  conda_envs/                 lincdisease, lincdisease_peptide (from ../envs/), snakemake
-  lincdisease_data/           download cache (about 40 GB; filled by the fetch step)
-  disease_mechanism/v2/       outputs; the workflow runs here
-  external_data/govaere2020/  Govaere FASTQ (temporary), CRAMs, gene counts
+Liver_projects/
+  external_data/conservation_and_mutations/PhyloP100way.bw
+  external_data/govaere2020/     Govaere FASTQ (temporary), CRAMs, gene counts, locus coverage
+  wf_runs/<lincorfz run>/        = <root>
+    runs/v2/results/             lincorfz results (ranked ORFs, lincRNA transcripts, final/ candidate table)
+    proteomics/ peptidomics/     lincorfz notebook results
+    conda_envs/                  lincdisease, lincdisease_peptide, snakemake (from ../envs/), next to lincorfz's
+    lincdisease_data/            download cache (about 40 GB; filled by the fetch step)
+    disease_mechanism/v2/        outputs; the workflow runs here
 ```
 
-The three `inputs/` entries are symbolic links to wherever the lincorfz run lives, for example:
-
-```
-mkdir -p inputs
-ln -s <lincorfz run>/results inputs/lincorfz_results
-ln -s <lincorfz project dir> inputs/lincorfz_peptides
-ln -s <PhyloP100way.bw> inputs/PhyloP100way.bw
-```
-
-To start from another lincorfz run or candidate table, change the links (or the entries in `config.yaml`) and
-use a new `out_dir`.
+The Govaere CRAMs are reference-compressed against `lincdisease_data/reference/GRCh38.primary_assembly.genome.fa`;
+reading them needs that FASTA. For another layout, change the entries in `config.yaml`, and use a new `out_dir`
+to start from another lincorfz run or candidate table.
 
 ## Daily use
 Run these from the root directory on a login node (`L` = the `lincdisease/` directory of the repository):
@@ -114,14 +109,17 @@ Unit tests on synthetic data for the statistics, the scoring and the input check
 - `lincdisease`: `../envs/lincdisease.yml` (versions of the v2 results; exact builds in `lincdisease.lock.txt`).
 - `lincdisease_peptide`: `../envs/lincdisease_peptide.yml` (+ `.lock.txt`, `.pip.txt`), the tools of the
   `peptide` step; the file explains how to fetch the MHCflurry models.
-- Snakemake 9.27.1 with the cluster-generic executor 1.0.9, in its own environment
+- `snakemake`: `../envs/snakemake.yml` (+ `.lock.txt`), Snakemake 9.27.1 with the cluster-generic executor 1.0.9
   (`<root>/conda_envs/snakemake`; set `SNAKEMAKE_ENV` to use another one).
 
 The site conda proxy may be blocked; then point conda at the channels directly (a `CONDARC` with
-`channels: [https://conda.anaconda.org/conda-forge, https://conda.anaconda.org/bioconda]`). Snakemake:
+`channels: [https://conda.anaconda.org/conda-forge, https://conda.anaconda.org/bioconda]`). To build the three
+environments with the exact builds of the v2 results (`E` = the `envs/` directory of the repository):
 
 ```
 module load Miniforge3
-mamba create -p <prefix> -c conda-forge -c bioconda python=3.12 snakemake-minimal=9.27.1 \
-      snakemake-executor-plugin-cluster-generic=1.0.9
+for env in lincdisease lincdisease_peptide snakemake; do
+  mamba create -y -p <root>/conda_envs/$env --file E/$env.lock.txt
+done
+<root>/conda_envs/lincdisease_peptide/bin/pip install --no-deps -r E/lincdisease_peptide.pip.txt
 ```
