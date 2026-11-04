@@ -1,0 +1,13 @@
+# Snakemake environment of run.sh (<root>/conda_envs/snakemake). Versions of the v2 results; the exact build is in
+# snakemake.lock.txt (mamba create -p <prefix> --file snakemake.lock.txt). The workflow profile uses the
+# cluster-generic executor; the slurm plugin is installed but not used.
+name: snakemake
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=3.12
+  - snakemake-minimal=9.27.1
+  - snakemake-executor-plugin-cluster-generic=1.0.9
+  - snakemake-executor-plugin-slurm=2.8.0

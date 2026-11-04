@@ -1,0 +1,338 @@
+"""
+lincdisease workflow: disease and mechanism annotation of the lincorfz ORFs (LOGIC.md), starting from a finished
+lincorfz run (config: results_dir, candidates, peptides_dir). Start it with ../run.sh, not directly.
+
+Steps that need the network (downloads, recount3 bigWig streaming, Europe PMC) are local rules and run on the
+login node in the Snakemake process; all others are Slurm jobs. Every step is one `python -m lincdisease <step>`.
+A step reruns when one of its input tables or its code (code(): the lincdisease modules it uses and its part of
+__main__.py) change. Exceptions: the downloads (`fetch`) and the recount3 streaming (`quant*`) only run once (see
+NEEDS_FETCH and the quant rules).
+"""
+import os
+import shlex
+import sys
+from pathlib import Path
+
+PKG = Path(workflow.basedir).parent          # the lincdisease directory (package, config, workflow)
+configfile: str(PKG / "config" / "config.yaml")
+
+# config paths are relative to the root directory (run.sh passes --config root=DIR). Inputs are resolved through
+# symbolic links, so the recorded input files do not depend on where a link lives.
+if "root" not in config:
+    raise WorkflowError("no root directory: start the workflow with run.sh (or pass --config root=DIR)")
+ROOT = os.path.abspath(config["root"])
+for key in ("results_dir", "candidates", "peptides_dir", "phylop"):
+    config[key] = os.path.realpath(os.path.join(ROOT, config[key]))
+for key in ("out_dir", "data_dir", "python", "diamond", "tool_env"):
+    config[key] = os.path.join(ROOT, config[key])
+for key in ("dir", "reference"):
+    config["govaere"][key] = os.path.abspath(os.path.join(ROOT, config["govaere"][key]))   # the default dir has ..
+workdir: config["out_dir"]
+
+RESULTS, CANDIDATES, DATA = config["results_dir"], config["candidates"], config["data_dir"]
+PEPTIDES = config["peptides_dir"]
+LD = f"PYTHONPATH={PKG} {config['python']} -m lincdisease --out-dir ."     # one step: {LD} <step> [options]
+COMMON = f"--results-dir {RESULTS} --candidates {CANDIDATES} --data-dir {DATA}"
+N_QUANT, N_QUANT_SRA = config["quant_workers"], config["quant_sra_workers"]
+MODULES = PKG / "lincdisease"
+sys.path.insert(0, workflow.basedir)
+import codehash
+
+
+def code(step, *modules):
+    """Fingerprint of the code of a step (workflow/codehash.py) as a rule parameter: a change of it reruns the
+    step, edits of docstrings, comments and of other steps' code do not. `modules`: the lincdisease modules the
+    step uses besides its own module (if there is one); their imports are followed."""
+    own = [step] if (MODULES / f"{step}.py").exists() else []
+    return codehash.fingerprint(MODULES, step, own + list(modules))
+
+
+def mem(gb):
+    """Memory in MB, doubled on the retry (profile: retries: 1) after a failed first attempt."""
+    return lambda wildcards, attempt: gb * 1000 * attempt
+
+
+def minutes(m):
+    """Slurm time limit, doubled on the retry: a job that ran out of time is not retried with the same limit."""
+    return lambda wildcards, attempt: m * attempt
+
+
+LINC = {"gtf": f"{RESULTS}/lincRNAs/lincRNA_transcripts.gtf", "tsv": f"{RESULTS}/lincRNAs/lincRNA_transcripts.tsv"}
+ORFS = [f"{RESULTS}/final/lincORFs.ranked.tsv", CANDIDATES]
+PEPTIDE_TABLES = [f"{PEPTIDES}/{d}/{f}" for d, f in (("proteomics", "analysis/lincORF_peptides.tsv"),
+                                              ("proteomics", "fasta/lincORF_entries.tsv"),
+                                              ("peptidomics", "analysis/immunopeptides.tsv"),
+                                              ("peptidomics", "fasta/lincORF_entries.tsv"))]
+FETCHED = "flags/fetch.done"
+NEEDS_FETCH = ancient(FETCHED)    # order only: a new download does not rerun the steps (use ./run.sh redo)
+QUANT = expand("flags/quant.{w}.done", w=range(N_QUANT))
+QUANT_SRA = expand("flags/quant_sra.{w}.done", w=range(N_QUANT_SRA))
+QUANT_NMD = expand("flags/quant_nmd.{w}.done", w=range(N_QUANT_SRA))
+QUANT_HCC = expand("flags/quant_hcc.{w}.done", w=range(N_QUANT_SRA))
+
+wildcard_constraints:
+    w=r"\d+",           # quant worker
+
+# login node (network); everything else is a Slurm job
+localrules: all, fetch, manifest, quant, chronic_manifest, quant_sra, nmd_manifest, quant_nmd, hcc_manifest, quant_hcc,
+            literature, govaere, govaere_fastq
+EXPRESSION = ["quant/regions.tsv", "quant/features.tsv"]      # read with every sample set's sums
+
+include: "rules/govaere.smk"
+
+
+rule all:
+    input:
+        "lincdisease.orfs.tsv", "lincdisease.candidates.tsv", "lincdisease.screen_supported.tsv", "controls.tsv",
+        "lincdisease.table.html"
+
+
+# ------------------------------------------------------------------ login node (network)
+
+rule fetch:
+    """All public downloads into data_dir; fails with a list if a hand-placed file is missing."""
+    output: touch(FETCHED)
+    log: "logs/fetch.log"
+    shell: "{LD} fetch --data-dir {DATA} > {log} 2>&1"
+
+
+rule manifest:
+    input: NEEDS_FETCH
+    output: "quant/samples.tsv"
+    log: "logs/manifest.log"
+    shell: "{LD} manifest --data-dir {DATA} > {log} 2>&1"
+
+
+rule quant:
+    """Stream the recount3 bigWigs of TCGA-LIHC / GTEx (one worker = every N_QUANT-th sample). Sums are appended
+    per sample in quant/sums/sums.<w>.tsv and survive an interruption; a rerun only fetches the missing samples.
+    The regions are an `ancient` input: new regions do not requantify, but the sums keep a copy of the regions
+    they were computed on, and reading them raises if those have changed (expression.read_sums)."""
+    input: ancient("quant/regions.tsv"), ancient("quant/samples.tsv")
+    output: touch("flags/quant.{w}.done")
+    log: "logs/quant.{w}.log"
+    shell: "{LD} quant --worker {wildcards.w} --n-workers {N_QUANT} --scratch quant > {log} 2>&1"
+
+
+rule chronic_manifest:
+    input: NEEDS_FETCH
+    output: "quant_sra/samples.tsv"
+    log: "logs/chronic_manifest.log"
+    shell: "{LD} chronic --manifest > {log} 2>&1"
+
+
+rule quant_sra:
+    input: ancient("quant/regions.tsv"), ancient("quant_sra/samples.tsv")
+    output: touch("flags/quant_sra.{w}.done")
+    log: "logs/quant_sra.{w}.log"
+    shell: "{LD} quant --sample-set quant_sra --worker {wildcards.w} --n-workers {N_QUANT_SRA} --scratch quant_sra > {log} 2>&1"
+
+
+rule nmd_manifest:
+    input: NEEDS_FETCH
+    output: "quant_nmd/samples.tsv"
+    log: "logs/nmd_manifest.log"
+    shell: "{LD} nmd --manifest > {log} 2>&1"
+
+
+rule quant_nmd:
+    input: ancient("quant/regions.tsv"), ancient("quant_nmd/samples.tsv")
+    output: touch("flags/quant_nmd.{w}.done")
+    log: "logs/quant_nmd.{w}.log"
+    shell: "{LD} quant --sample-set quant_nmd --worker {wildcards.w} --n-workers {N_QUANT_SRA} --scratch quant_nmd > {log} 2>&1"
+
+
+rule nmd:
+    input: QUANT_NMD, "quant_nmd/samples.tsv", EXPRESSION, NEEDS_FETCH
+    params: code=code("nmd")
+    output: "nmd.loci.tsv"
+    resources: mem_mb=mem(16), runtime=minutes(60)
+    log: "logs/nmd.log"
+    shell: "{LD} nmd --data-dir {DATA} > {log} 2>&1"
+
+
+rule hcc_manifest:
+    """Runs of the independent HCC cohorts (tumour + adjacent normal of the same patients) in recount3."""
+    input: NEEDS_FETCH
+    output: "quant_hcc/samples.tsv"
+    log: "logs/hcc_manifest.log"
+    shell: "{LD} hcc --manifest > {log} 2>&1"
+
+
+rule quant_hcc:
+    input: ancient("quant/regions.tsv"), ancient("quant_hcc/samples.tsv")
+    output: touch("flags/quant_hcc.{w}.done")
+    log: "logs/quant_hcc.{w}.log"
+    shell: "{LD} quant --sample-set quant_hcc --worker {wildcards.w} --n-workers {N_QUANT_SRA} --scratch quant_hcc > {log} 2>&1"
+
+
+rule literature:
+    """Europe PMC counts (cached per query in data_dir/europepmc_counts.json)."""
+    input: ORFS, NEEDS_FETCH
+    params: code=code("literature", "controls")
+    output: "D5.literature.tsv"
+    log: "logs/literature.log"
+    shell: "{LD} literature {COMMON} --threads 4 > {log} 2>&1"
+
+
+# ------------------------------------------------------------------ Slurm
+
+rule scaling:
+    """Size factors of the TCGA-LIHC / GTEx samples (expression.py)."""
+    input: QUANT, "quant/samples.tsv", EXPRESSION, NEEDS_FETCH
+    params: code=code("scaling", "expression")
+    output: "quant/size_factors.tsv"
+    resources: mem_mb=mem(32), runtime=minutes(60)
+    log: "logs/scaling.log"
+    shell: "{LD} scaling --data-dir {DATA} > {log} 2>&1"
+
+
+rule regions:
+    input: ORFS, LINC["gtf"], NEEDS_FETCH
+    params: code=code("regions", "quant", "controls")
+    output: "quant/regions.tsv", "quant/features.tsv"
+    resources: mem_mb=mem(16), runtime=minutes(60)
+    log: "logs/regions.log"
+    shell: "{LD} regions {COMMON} > {log} 2>&1"
+
+
+rule homology:
+    input: ORFS, NEEDS_FETCH
+    params: code=code("homology", "quant")
+    output: "homology.orfs.tsv"
+    threads: 8
+    resources: mem_mb=mem(24), runtime=minutes(120)
+    log: "logs/homology.log"
+    # the cached DIAMOND hits belong to the previous ORF set
+    shell: "rm -f homology/hits.tsv; {LD} homology {COMMON} --diamond {config[diamond]} --threads {threads} > {log} 2>&1"
+
+
+rule qc:
+    input: ORFS, PEPTIDE_TABLES, "homology.orfs.tsv", "quant/features.tsv", NEEDS_FETCH
+    params: code=code("qc", "mechanism")
+    output: "qc.orfs.tsv", "peptides.orfs.tsv"
+    resources: mem_mb=mem(16), runtime=minutes(60)
+    log: "logs/qc.log"
+    shell: "{LD} qc {COMMON} --peptides-dir {PEPTIDES} > {log} 2>&1"
+
+
+rule peptide:
+    """Sequence features (hmmsearch, metapredict) and MHCflurry HLA-I presentation, in the tool_env environment."""
+    input: ORFS, NEEDS_FETCH
+    params: code=code("peptide", "hla")
+    output: "peptide_features.orfs.tsv", "hla.orfs.tsv", "hla.control.tsv"
+    threads: 4
+    resources: mem_mb=mem(16), runtime=minutes(360)
+    log: "logs/peptide.log"
+    shell: "{LD} peptide {COMMON} --tool-env {config[tool_env]} --threads {threads} > {log} 2>&1"
+
+
+rule support:
+    input: ORFS, LINC["gtf"], "quant/regions.tsv", config["phylop"], NEEDS_FETCH
+    params: code=code("support", "peptide", "screens", "quant")
+    output: "support.orfs.tsv"
+    threads: 4
+    resources: mem_mb=mem(16), runtime=minutes(120)
+    log: "logs/support.log"
+    shell: "{LD} support {COMMON} --phylop {config[phylop]} --threads {threads} > {log} 2>&1"
+
+
+rule genetics:
+    input: ORFS, "quant/features.tsv", NEEDS_FETCH
+    params: code=code("genetics", "eqtl", "controls")
+    output: "D4.gwas.tsv", "D4.eqtl.tsv"
+    resources: mem_mb=mem(32), runtime=minutes(60)
+    log: "logs/genetics.log"
+    shell: "{LD} genetics {COMMON} > {log} 2>&1"
+
+
+rule somatic:
+    input: QUANT, "quant/samples.tsv", "quant/size_factors.tsv", EXPRESSION, NEEDS_FETCH
+    params: code=code("somatic", "expression")
+    output: "D3.somatic.tsv"
+    resources: mem_mb=mem(48), runtime=minutes(120)
+    log: "logs/somatic.log"
+    shell: "{LD} somatic {COMMON} > {log} 2>&1"
+
+
+rule hcc:
+    input: QUANT_HCC, "quant_hcc/samples.tsv", EXPRESSION, NEEDS_FETCH
+    params: code=code("hcc")
+    output: "D1.hcc_replication.tsv", "quant_hcc/size_factors.tsv"
+    resources: mem_mb=mem(16), runtime=minutes(60)
+    log: "logs/hcc.log"
+    shell: "{LD} hcc --data-dir {DATA} > {log} 2>&1"
+
+
+rule encode:
+    input: ORFS, LINC["gtf"], LINC["tsv"], NEEDS_FETCH
+    params: code=code("encode", "eclip", "chromatin", "controls")
+    output: "encode.loci.tsv", "eclip.loci.tsv", "chromatin.loci.tsv"
+    resources: mem_mb=mem(32), runtime=minutes(120)
+    log: "logs/encode.log"
+    shell: "{LD} encode {COMMON} > {log} 2>&1"
+
+
+rule chronic:
+    """D1 chronic: recount3 cohorts (quant_sra/) and the Govaere runs in GOVAERE_USED (locus coverage, STAR gene
+    counts and logs of rules/govaere.smk)."""
+    input: QUANT_SRA, "quant_sra/samples.tsv", EXPRESSION, "qc.orfs.tsv", NEEDS_FETCH,
+           GOV_RUNS_TSV, expand(f"{GOV_DIR}/locus_cov/{{run}}.tsv", run=GOVAERE_USED),
+           soft=f"{GOV_DIR}/metadata/GSE135251_samples.soft.txt"
+    params: code=code("chronic")
+    output: "D1.chronic.tsv", "quant_sra/size_factors.tsv"
+    resources: mem_mb=mem(48), runtime=minutes(120)
+    log: "logs/chronic.log"
+    shell: "{LD} chronic --data-dir {DATA} --govaere-dir {GOV_DIR} --govaere-runs {GOV_RUNS_TSV} --govaere-soft {input.soft} "
+           "--govaere-exclude {GOVAERE_EXCLUDE} > {log} 2>&1"
+
+
+rule mechanism:
+    input: ORFS, LINC["gtf"], LINC["tsv"], QUANT, "quant/samples.tsv", "quant/size_factors.tsv", EXPRESSION,
+           "qc.orfs.tsv", "peptides.orfs.tsv", "peptide_features.orfs.tsv", "support.orfs.tsv", "nmd.loci.tsv",
+           "encode.loci.tsv", "eclip.loci.tsv", "chromatin.loci.tsv", NEEDS_FETCH
+    params: code=code("mechanism", "expression", "disease")
+    output: "mechanism.orfs.tsv", "coexpression.loci.tsv"
+    resources: mem_mb=mem(48), runtime=minutes(120)
+    log: "logs/mechanism.log"
+    shell: "{LD} mechanism {COMMON} > {log} 2>&1"
+
+
+rule disease:
+    input: ORFS, QUANT, "quant/samples.tsv", "quant/size_factors.tsv", EXPRESSION, "D1.chronic.tsv",
+           "D1.hcc_replication.tsv", "D3.somatic.tsv", "D4.gwas.tsv", "D4.eqtl.tsv", "D5.literature.tsv", NEEDS_FETCH
+    params: code=code("disease", "integrate", "hcc", "expression")
+    output: "disease.loci.tsv"
+    resources: mem_mb=mem(48), runtime=minutes(120)
+    log: "logs/disease.log"
+    shell: "{LD} disease {COMMON} > {log} 2>&1"
+
+
+rule weights:
+    input: "disease.loci.tsv"
+    params: code=code("weights")
+    output: "disease_score_fitted.tsv", "weights.tsv"
+    resources: mem_mb=mem(8), runtime=minutes(30)
+    log: "logs/weights.log"
+    shell: "{LD} weights {COMMON} > {log} 2>&1"
+
+
+rule report:
+    input: ORFS, "qc.orfs.tsv", "mechanism.orfs.tsv", "disease.loci.tsv", "disease_score_fitted.tsv",
+           "peptides.orfs.tsv", "hla.orfs.tsv", "hla.control.tsv", "support.orfs.tsv"
+    params: code=code("report", "scoring")
+    output: "lincdisease.orfs.tsv", "lincdisease.candidates.tsv", "lincdisease.screen_supported.tsv", "controls.tsv"
+    resources: mem_mb=mem(16), runtime=minutes(30)
+    log: "logs/report.log"
+    shell: "{LD} report {COMMON} > {log} 2>&1"
+
+
+rule html:
+    """Sortable HTML table of all ORFs, coloured by category (summary scores first, detail last)."""
+    input: "lincdisease.orfs.tsv", "support.orfs.tsv", "mechanism.orfs.tsv", "disease.loci.tsv", "peptides.orfs.tsv",
+           "hla.orfs.tsv"
+    output: "lincdisease.table.html"
+    resources: mem_mb=mem(8), runtime=minutes(30)
+    log: "logs/html.log"
+    params: code=code("html", "table_html"), of_interest=" ".join(shlex.quote(x) for x in config.get("html", {}).get("of_interest", []))
+    shell: "{LD} html --of-interest {params.of_interest} > {log} 2>&1"

@@ -1,0 +1,127 @@
+# lincdisease workflow
+
+Annotates the lincorfz ORFs with disease relevance and mechanism classes (see `../LOGIC.md`). It starts from a
+finished lincorfz run and does not rerun any part of it. Everything is driven by `../run.sh`, so you do not need
+to know Snakemake to use it.
+
+## Root directory and inputs
+All paths in `../config/config.yaml` are relative to a **root directory**, given at run time with
+`run.sh --root DIR` or taken from the current directory. No paths are stored in git. The root is the lincorfz
+output directory (`$OUT` of `../../README.md`), so the lincorfz results are read in place; the workflow adds its
+own directories next to them:
+
+```
+Liver_projects/
+  external_data/conservation_and_mutations/PhyloP100way.bw
+  external_data/govaere2020/     Govaere FASTQ (temporary), CRAMs, gene counts, locus coverage
+  wf_runs/<lincorfz run>/        = <root>
+    runs/v2/results/             lincorfz results (ranked ORFs, lincRNA transcripts, final/ candidate table)
+    proteomics/ peptidomics/     lincorfz notebook results
+    conda_envs/                  lincdisease, lincdisease_peptide, snakemake (from ../envs/), next to lincorfz's
+    lincdisease_data/            download cache (about 40 GB; filled by the fetch step)
+    disease_mechanism/v2/        outputs; the workflow runs here
+```
+
+The Govaere CRAMs are reference-compressed against `lincdisease_data/reference/GRCh38.primary_assembly.genome.fa`;
+reading them needs that FASTA. For another layout, change the entries in `config.yaml`, and use a new `out_dir`
+to start from another lincorfz run or candidate table.
+
+## Daily use
+Run these from the root directory on a login node (`L` = the `lincdisease/` directory of the repository):
+
+```
+L/run.sh plan            # what would run; changes nothing. L/run.sh plan -v also gives the reason per step
+L/run.sh start           # run in the background; you can log out
+L/run.sh status          # running or not, progress lines and errors, Slurm jobs
+L/run.sh stop            # stop and cancel the Slurm jobs
+L/run.sh redo disease    # rerun a step (rule name) and everything that depends on it
+L/run.sh start D1.chronic.tsv --forcerun chronic   # rerun one step only, not what depends on it
+L/run.sh start govaere   # Govaere 2020 FASTQ -> CRAM + gene counts only
+L/run.sh adopt homology.orfs.tsv   # accept an existing output as up to date (an edit that cannot change it)
+```
+
+From elsewhere, add `--root DIR` before the command. A step reruns by itself when one of its input tables
+changes, or when its code changes: the lincdisease modules it uses, the modules they import, `inputs.py`,
+`resources.py`, and its own part of `__main__.py` (its `cmd_<step>` with the helpers and constants it uses, and
+its command-line options). This is a fingerprint of the code without docstrings and comments (`code()` in the
+Snakefile, `codehash.py`), so editing docstrings, comments or another step's command does not rerun a step;
+editing logging calls does. Two kinds of steps run only once: the downloads (`fetch`; use `run.sh redo fetch`
+after adding a resource) and the recount3 streaming (`quant*`, which resumes where it stopped). After an edit that
+cannot change an expensive step's result (homology, peptide), `run.sh adopt <their outputs>` marks them up to
+date instead of rerunning them.
+
+Final outputs in the output directory: `lincdisease.table.html` (all ORFs by category: candidate, of interest, screen, other; sortable,
+with an index of the scores), `lincdisease.candidates.tsv`, `lincdisease.orfs.tsv`,
+`lincdisease.screen_supported.tsv`, `controls.tsv`. Identifiers and column prefixes are explained under "Outputs"
+in `../LOGIC.md`.
+
+## Running one step by hand
+Every rule is one command, printed in `logs/workflow/latest.log` (`printshellcmds`). To run or debug a step
+outside Snakemake, from the output directory:
+
+```
+PYTHONPATH=<L> <root>/conda_envs/lincdisease/bin/python -m lincdisease --out-dir . <step> [options]
+```
+
+`--out-dir` comes before the step; `python -m lincdisease --out-dir . <step> --help` lists the options. Outputs
+made this way are not known to Snakemake: run `run.sh adopt <outputs>` afterwards, or let the workflow redo them.
+
+## Tests
+```
+cd <L> && <root>/conda_envs/lincdisease/bin/python -m pytest -q
+```
+Unit tests on synthetic data for the statistics, the scoring and the input checks (`tests/`).
+
+## Where to look when something fails
+- `run.sh status` shows the error lines. The full log is `<out_dir>/logs/workflow/latest.log`; the failing step's
+  own log is printed there too (`show-failed-logs`).
+- The log of each step is `<out_dir>/logs/<step>.log`; the Slurm log is `<out_dir>/logs/slurm/<step>/<jobid>.log`.
+- "Directory cannot be locked": an earlier run was killed (e.g. the login session ended uncleanly). Check with
+  `run.sh status` that nothing is running, then `run.sh unlock` and start again.
+- A failed Slurm job (out of memory or time) is retried once with twice the memory and time limit. If it fails
+  again, raise its `mem(...)` or `minutes(...)` value in `Snakefile`.
+- A failed step does not stop independent steps (`keep-going`); after fixing the cause, `run.sh start` resumes
+  and reruns only what is missing or failed.
+
+## How it runs
+- `Snakefile` lists one rule per `python -m lincdisease <step>` with its input and output tables;
+  `rules/govaere.smk` holds the Govaere alignment.
+- Compute nodes have no network. Steps that download (`fetch`, `manifest`, `chronic_manifest`, `nmd_manifest`,
+  `hcc_manifest`, `quant`, `quant_sra`, `quant_nmd`, `quant_hcc`, `literature`, `govaere_fastq`) run on the login
+  node inside the Snakemake process. All other steps are submitted with plain `sbatch` (`profile/config.yaml`),
+  and their state is read with `sacct` (`scripts/slurm_status.sh`).
+- `fetch` downloads every public resource with a stable URL into `data_dir`. It also checks the files that were
+  placed by hand (`resources.MANUAL`: journal supplements, GENCODE Ribo-seq ORFs, Pfam, GTEx eQTLs, MHCflurry
+  models, proteomes) and lists each missing file with its source.
+- The recount3 streaming (`quant*`) appends one row per sample. An interrupted run keeps what it has, and a
+  rerun fetches only the missing samples; a sample that fails is retried by the next run (the step exits non-zero).
+  Each sums directory keeps the regions it was computed on (`regions.tsv`): if `quant/regions.tsv` changes for a
+  feature, reading the sums stops with an error, and the directory must be deleted and quantified again. Features
+  added later are quantified into their own directory (`quant --features ... --sums-dir sums_<name>`). Done
+  markers are in `<out_dir>/flags/`.
+- Govaere: the FASTQ files are temporary. Snakemake deletes them once their CRAM passes the completeness check
+  (`cram/<run>.ok`). A download waits while `max_fastq_gb` of FASTQ is on disk (at most 6 h, then it fails). The
+  coverage of the quantified loci in each CRAM (`<govaere dir>/locus_cov/<run>.tsv`, rule `govaere_locus_cov`,
+  `scripts/govaere_locus_cov.sh`) feeds D1 chronic for all runs except `govaere.exclude` in `config.yaml`;
+  `locus_cov/regions.tsv` keeps its regions, as for the recount3 sums.
+
+## Software
+- `lincdisease`: `../envs/lincdisease.yml` (versions of the v2 results; exact builds in `lincdisease.lock.txt`).
+- `lincdisease_peptide`: `../envs/lincdisease_peptide.yml` (+ `.lock.txt`, `.pip.txt`), the tools of the
+  `peptide` step; the file explains how to fetch the MHCflurry models.
+- `snakemake`: `../envs/snakemake.yml` (+ `.lock.txt`), Snakemake 9.27.1 with the cluster-generic executor 1.0.9
+  (`<root>/conda_envs/snakemake`; set `SNAKEMAKE_ENV` to use another one).
+
+The site conda proxy may be blocked; then point conda at the channels directly (a `CONDARC` with
+`channels: [https://conda.anaconda.org/conda-forge, https://conda.anaconda.org/bioconda]`). To build the three
+environments with the exact builds of the v2 results (`E` = the `envs/` directory of the repository):
+
+```
+module load Miniforge3
+for env in lincdisease lincdisease_peptide snakemake; do
+  mamba create -y -p <root>/conda_envs/$env --file E/$env.lock.txt
+done
+<root>/conda_envs/lincdisease_peptide/bin/pip install --no-deps -r E/lincdisease_peptide.pip.txt
+```
+
+If the site PyPI proxy refuses the pip install (HTTP 403), add `--index-url https://pypi.org/simple`.

@@ -1,42 +1,37 @@
-# CRISPR Projects Analysis and Pipelines
+# Ribosome profiling reveals extensive translational alterations in steatohepatitis-associated hepatocellular carcinoma
 
-This repository contains the computational workflows and downstream analysis notebooks related to CRISPR projects in Zavolan lab.
+This repository contains the jupyter notebook and auxiliary scripts related to the analysis of evolutionary conservation and mutations associated with novel ORFs (nORFs) identified in Ribo-seq data from tumor and non-tumor hepatocellular carcinoma (HCC) samples.
 
-The repository is optimized for running BOTH the workflows and analysis in jupyter notebook on HPC cluster.
+Historically, this analysis is related to CRISPR projects of the Zavolan Lab, hence it's stored in respective repository.
+
+> **Follow-up project: Liver lincRNA ORFs.** Automated de novo annotation of expressed lincRNAs in hepatic cell lines and prioritization of their translated ORFs (Ribo-seq, polysome profiling, RNA-seq, PhyloCSF), with a Nextflow pipeline and a dedicated notebook, followed by a second stage (`lincdisease`, Snakemake) that annotates these ORFs with disease relevance and mechanism classes. See [Liver_lincRNA_ORFs/README.md](Liver_lincRNA_ORFs/README.md). The project is self-contained (own README, pipeline and environments), NO need to follow the instructions below if you are only interested in that follow-up project.
 
 On sciCORE HPC, running jupyter notebook on a computational node is nicely enabled by [OnDemand service](https://docs.scicore.unibas.ch/HPC%20Cluster/interactivecomputing/#open-ondemand-ood).
 
-We utilize a hybrid approach: **Snakemake** for robust, scalable data processing on HPC clusters (sciCORE), and **Jupyter Notebooks** for interactive downstream analysis and visualization.
-
-# Current state
-Currently, we use RNA-seq and Ribo-seq data to identify targets for CRISPR perturbations
-We make UCSC trackhub to interactively visualize these data using [UCSC Genome browser](https://genome-euro.ucsc.edu/cgi-bin/hgTracks?db=hg38&lastVirtModeType=default&lastVirtModeExtraState=&virtModeType=default&virtMode=0&nonVirtPosition=&position=chr12%3A6534517-6538371)
+**Jupyter Notebook** is used for interactive analysis and visualization, and for automatic generation of SLURM scripts that should be run on the HPC cluster.
 
 ## Repository Structure
 
 ```text
 .
-├── CRISPR_Projects-current.ipynb       # Main master Jupyter notebook for downstream analysis
+├── HCC_RiboSeq_paper.ipynb             # Main master Jupyter notebook with analysis
 ├── CRISPR_projects.template.env        # Template for required environment variables/paths
-├── install/
-│   └── environment.yaml                # Conda environment specification for the Jupyter notebook
-└── WF/                                 # Snakemake Workflow Engine
-    ├── Snakefile-prepare-faster        # Pipeline Step 1: RNA-seq data prep (alignment, etc.)
-    ├── Snakefile-quantification-faster # Pipeline Step 2: Quantification (gene counts, PAQR quantification of APA usage)
-    ├── config.template.yaml            # Template configuration for Snakemake parameters
-    ├── envs/                           # Conda environments isolated for specific Snakemake rules
-    ├── profile/                        # SLURM execution profile for the HPC
-    └── scripts/                        # Python and R scripts utilized by both Snakemake and Jupyter
+├── environment.hcc_riboseq_paper.yml   # Conda environment of the notebook (see step 3)
+├── analysis_scripts/                    
+│   ├── compute_track_metrics.py        # python script for computing various metrics stored in external .bb or .bigwig files
+└── Liver_lincRNA_ORFs/                 # Follow-up project, self-contained (own README, pipelines and environments)
+    ├── lincorfz/                       #   stage 1: discovery of translated lincRNA ORFs (Nextflow)
+    └── lincdisease/                    #   stage 2: disease relevance and mechanism classes (Snakemake)
 ```
 
 ## Quick Start & Setup
 
-To ensure strict reproducibility and security, this project uses `.env` files to manage all absolute paths (data directories, genome annotations, etc.). **Do not hardcode paths into the Python or Snakemake files.**
+To ensure strict reproducibility **and security**, this project uses `.env` files to manage all absolute paths (data directories, genome annotations, etc.). **Do not hardcode absolute paths into the code.**
 
 ### 1. Clone the Repository
-Clone this repository into your local user space (`$HOME`):
+Clone **HCC_Riboseq_paper branch**:
 ```bash
-git clone https://github.com/zavolanlab/crispr-projects.git
+git clone --branch HCC_Riboseq_paper https://github.com/zavolanlab/crispr-projects.git
 cd crispr-projects
 ```
 
@@ -54,26 +49,22 @@ You must map the project to your local HPC paths.
 This way `CRISPR_projects.scicore.env` will be automatically accessible by group members but will not be tracked by git.
 *(Note: `*.env` files are ignored by git to protect private cluster paths, except the `CRISPR_projects.template.env` file).*
 
-### 3. Install the Conda Environment
-Create and activate the master environment required to run the Jupyter notebook and standard data science libraries (Pandas, UMAP, SciPy, BioPython, etc.):
+The notebook automatically loads your `.env` paths using `python-dotenv`, allowing it to dynamically locate the files in the system regardless of where you cloned this repository.
+
+### 3. Create the conda environment of the notebook
+Analysis in the notebook is largely based on the functions from [zavolab_pyutils](https://github.com/zavolanlab/zavolab_pyutils/tree/dev), but the environment that can be created from that repository does **not** contain all modules used here. Create the dedicated environment instead; it installs zavolab_pyutils (functions and the `transcript_to_genomic` / `cds_to_transcriptomic` command-line tools) together with all other Python modules imported by the notebook, `bedtools` and the UCSC kent utilities (`bigWigMerge`, `bedGraphToBigWig`, `bedToBigBed`, `gtfToGenePred`, ...):
 ```bash
-conda env create -f install/environment.yaml
-conda activate crispr_projects
+PYTHONNOUSERSITE=1 conda env create -f environment.hcc_riboseq_paper.yml   # on a login node (needs internet)
+conda activate hcc_riboseq_paper
 ```
+Use this environment (`hcc_riboseq_paper`) as the kernel of `HCC_RiboSeq_paper.ipynb` and to run the SLURM scripts that the notebook generates (they activate it with `source activate`; replace the environment name there if you created it under another name).
 
-## Executing the Workflows
+## Liver_lincRNA_ORFs: independent of the setup above
 
-The heavy lifting is divided into two separate Snakemake workflows located in the `WF/` directory.
+The follow-up project in [Liver_lincRNA_ORFs/](Liver_lincRNA_ORFs/README.md) does **not** need the conda environment of step 3 nor anything else installed for `HCC_RiboSeq_paper.ipynb`. Its Nextflow pipeline brings its own conda environments (`Liver_lincRNA_ORFs/lincorfz/envs/`, built with `Liver_lincRNA_ORFs/lincorfz/setup_conda_envs.sh`), and its notebook runs in one of them; the same holds for its second stage, `lincdisease` (`Liver_lincRNA_ORFs/lincdisease/envs/`). The only shared piece is the `.env` file with the cluster paths (step 2): its notebook reads `Liver_projects.scicore.env` from the repository root. Follow [Liver_lincRNA_ORFs/README.md](Liver_lincRNA_ORFs/README.md) for everything else.
 
-Configuration of the workflows (i.e. creation of input .tsv with sample specification and .yaml config is done **inside** the jupyter notebook)
+## Submitting the SLURM jobs and computation-heavy bash commands
 
-`Bash` commands are also prepared inside the jupyter notebook. They should be further copied into command line and executed.
+`Bash` commands are also prepared inside the jupyter notebook. They should be further copied into command line and executed (either at the login node or at the computational node, see comments in the notebook).
 
-**On an HPC cluster like sciCORE**, workflows should be executed on a **login** node. Snakemake further automatically submits jobs to computational nodes.
-
-## Downstream Analysis
-Once the Snakemake workflows are complete, all results are routed to the shared group directories defined in your `.env` file. 
-
-Use respective sections of `CRISPR_Projects-current.ipynb` to analyze the outputs. 
-
-The notebook automatically loads your `.env` paths using `python-dotenv`, allowing it to dynamically locate all workflow results, figures, and metadata regardless of where you cloned this repository.
+**On an HPC cluster like sciCORE**, commands for downloading public data from web should be executed on a **login** node. Computation-heavy jobs should be executed strictly from computational nodes.

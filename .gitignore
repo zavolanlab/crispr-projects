@@ -8,6 +8,17 @@
 # EXCEPT for the safe template (force Git to track this one)
 !CRISPR_projects.template.env
 
+# Ignore all .ipynb files (Jupyter notebooks)
+*.ipynb
+# except the ones for which current branch is dedicated
+!HCC_RiboSeq_paper.ipynb
+!Liver_lincRNA_ORFs/Liver_lincRNA_ORFs.ipynb
+
+# Nextflow run artefacts (runs are written outside the repository, but just in case)
+.nextflow/
+.nextflow.log*
+work/
+
 # ========================
 # 2. Snakemake Hidden Files
 # ========================
@@ -17,6 +28,12 @@
 results/
 logs/
 data/
+
+# Workflow - in this branch it's not used
+WF/
+
+# Intallation of environment is also not used here
+install/
 
 # ========================
 # 3. Python & Jupyter Junk
@@ -33,6 +50,7 @@ __pycache__/
 # ========================
 
 upload_to_hf.with_token.py
+upload_to_hf.no_token.py
 
 # ========================
 # 4. OS / System Files
@@ -46,3 +64,8 @@ Thumbs.db
 WF/.java/
 WF/.cache/
 
+
+# ========================
+# Claude Code session logs (may contain cluster paths)
+# ========================
+Claude_session_*.txt

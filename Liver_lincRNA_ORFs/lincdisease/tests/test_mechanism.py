@@ -1,0 +1,122 @@
+import numpy as np
+import pandas as pd
+import pytest
+
+from lincdisease import mechanism
+
+
+def _tx(strand):
+    # two exons: 0-100 and 200-300
+    return pd.DataFrame({"transcript_id": ["T", "T"], "chrom": "c1", "start0": [0, 200], "end1": [100, 300],
+                         "strand": strand})
+
+
+def test_stop_to_last_junction_plus_and_minus():
+    orfs = pd.DataFrame({"transcript_id": ["T", "T"], "orf_start0": [10, 220], "orf_end1": [40, 260],
+                         "strand": ["+", "+"]})
+    d = mechanism.stop_to_last_junction(orfs, _tx("+"))
+    assert d.tolist() == [60, 0]          # 40..100 is exonic upstream of the junction at 200
+    orfs_m = pd.DataFrame({"transcript_id": ["T"], "orf_start0": [250], "orf_end1": [290], "strand": ["-"]})
+    assert mechanism.stop_to_last_junction(orfs_m, _tx("-")).tolist() == [50]   # 200..250
+
+
+def test_neighbour_position_divergent_and_antisense():
+    loci = pd.DataFrame({"gene_id": ["div", "anti", "far"], "chrom": "c1", "start0": [10_000, 50_000, 90_000],
+                         "end1": [12_000, 52_000, 91_000], "strand": ["+", "+", "+"]})
+    gencode = pd.DataFrame({"chrom": "c1", "start0": [7_000, 51_000], "end1": [9_000, 51_500],
+                            "strand": ["-", "-"], "gene_id": ["G1", "G2"], "gene_name": ["G1", "G2"],
+                            "gene_type": "protein_coding", "transcript_id": ["t1", "t2"]})
+    pos = mechanism.neighbour_position(loci, gencode)
+    assert pos.to_dict() == {"anti": 1.0, "div": 1.0, "far": 0.0}
+
+
+def test_specific_peptides():
+    prot = pd.DataFrame({"peptide": ["A", "B", "C"], "lincORF_entries": ["e1", "e1,e2", "e2"],
+                         "in_canonical_or_contaminant": ["False", "False", "True"]})
+    hla = pd.DataFrame({"Peptide": ["H"], "lincORF_entries": ["e2"], "lincORF_specific": [True]})
+    entries = pd.DataFrame({"entry": ["e1", "e2", "e2"], "orf_id": ["o1", "o2", "o3"]})   # o2, o3 identical
+    hla_entries = pd.DataFrame({"entry": ["e2"], "orf_id": ["o2"]})
+    p = mechanism.specific_peptides(prot, entries, hla, hla_entries)
+    assert p.loc["o1", "n_specific_peptides"] == 2
+    assert p.loc["o3", "n_specific_peptides"] == 1
+    assert p.loc["o2", "n_hla_specific"] == 1
+    assert p["copy_specific"].to_dict() == {"o1": True, "o2": True, "o3": False}
+
+
+def _feature_table(values):
+    """A features() table: every class feature (raw names, without _weighted) set to `values`."""
+    names = {c.removesuffix("_weighted") for cols in mechanism.CLASSES.values() for c in cols}
+    return pd.DataFrame({c: values for c in sorted(names)})
+
+
+def test_class_table_copy_weighting():
+    feats = _feature_table([0.0, 1.0])
+    feats["m1_phylocsf"] = [0.0, 10.0]
+    feats["m1_translation"] = [0.0, 10.0]
+    feats["copy_attribution"] = [1.0, 0.0]
+    feats["orf_length"] = [20.0, 20.0]
+    feats["m4_abundance"] = [1.0, 1.0]                  # same length and expression bin
+    res = mechanism.class_table(feats, pd.Series([True, True]), ["L1", "L2"])
+    for c in ("pct_m1_phylocsf_weighted", "pct_m1_translation_weighted"):
+        assert res.loc[1, c] == pytest.approx(0.5)     # no attribution -> neutral
+        assert res.loc[0, c] == pytest.approx(0.25)
+    assert "pct_m1_translation" not in res
+
+
+def test_small_rna_hosts_dedupes_sources():
+    loci = pd.DataFrame({"gene_id": ["host"], "chrom": "c1", "start0": [0], "end1": [1000], "strand": ["-"]})
+    gencode = pd.DataFrame({"chrom": "c1", "start0": [100], "end1": [170], "strand": ["-"], "gene_id": ["S1"],
+                            "gene_name": ["SNORD1"], "gene_type": ["snoRNA"], "transcript_id": ["t"]})
+    wg = pd.DataFrame({"chrom": ["c1", "c1", "c1"], "start0": [100, 400, 500], "end1": [170, 470, 570],
+                       "strand": ["-", "-", "+"]})
+    sr = mechanism.small_rna_genes(gencode, wg)
+    assert mechanism.small_rna_hosts(loci, sr).loc["host"] == 2.0
+
+
+def test_nearest_coding_and_coexpression():
+    genes = pd.DataFrame({"chrom": "chr1", "tss": [1000, 50_000, 51_000, 400_000]}, index=["g1", "g2", "g3", "g4"])
+    query = pd.DataFrame({"chrom": ["chr1", "chr1"], "tss": [3000, 900_000]}, index=["L1", "L2"])
+    nb = mechanism.nearest_coding(query, genes)
+    assert nb.loc["L1", "neighbour"] == "g1" and nb.loc["L1", "distance"] == 2000
+    assert pd.isna(nb.loc["L2", "neighbour"])
+    null = mechanism.nearest_coding(genes, genes, exclude_self=True)
+    assert null.loc["g2", "neighbour"] == "g3"
+
+    rng = np.random.default_rng(1)
+    g = pd.DataFrame(rng.normal(size=(4, 50)), index=["g1", "g2", "g3", "g4"])
+    loc = pd.DataFrame([g.loc["g1"] + rng.normal(0, 0.1, 50)], index=["L1"])
+    res = mechanism.coexpression(loc, g, nb.loc[["L1"]], null)
+    assert res.loc["L1", "coexpr_rho"] > 0.9 and res.loc["L1", "neighbour"] == "g1"
+
+
+def test_length_dependent_features_ranked_within_length_bins():
+    from scipy import stats
+    rng = np.random.default_rng(0)
+    n = 500
+    length = rng.integers(10, 300, n).astype(float)
+    feats = pd.DataFrame({"orf_length": length, "copy_attribution": 1.0,
+                          "m1_orf_share": length + rng.normal(0, 1, n),     # length-driven
+                          "m1_peptides": length})                         # not in LENGTH_DEPENDENT
+    res = mechanism.class_table(feats, pd.Series(True, index=feats.index), [f"L{i}" for i in range(n)])
+    assert stats.spearmanr(res["pct_m1_orf_share_weighted"], length)[0] < 0.5
+    assert stats.spearmanr(res["pct_m1_peptides"], length)[0] > 0.99
+    assert res["length_bin"].nunique() == mechanism.LENGTH_BINS
+
+
+def test_expression_dependent_features_ranked_within_expression_bins():
+    from scipy import stats
+    rng = np.random.default_rng(0)
+    n = 500
+    tpm = rng.normal(3, 2, n)
+    feats = pd.DataFrame({"orf_length": 50.0, "copy_attribution": 1.0, "m4_abundance": tpm,
+                          "m3_low_polysome": -tpm + rng.normal(0, 0.1, n),   # expression-driven
+                          "m3_coexpression": -tpm})                          # not in EXPRESSION_DEPENDENT
+    res = mechanism.class_table(feats, pd.Series(True, index=feats.index), [f"L{i}" for i in range(n)])
+    assert abs(stats.spearmanr(res["pct_m3_low_polysome"], tpm)[0]) < 0.5
+    assert stats.spearmanr(res["pct_m3_coexpression"], tpm)[0] < -0.99
+    assert res["expression_bin"].nunique() == mechanism.EXPRESSION_BINS
+
+
+def test_quantile_bins_missing_values():
+    bins = mechanism.quantile_bins([1.0, 2.0, np.nan, 4.0], [True] * 4, 2)
+    assert bins[2] == -1 and set(bins[[0, 1, 3]]) <= {0, 1}

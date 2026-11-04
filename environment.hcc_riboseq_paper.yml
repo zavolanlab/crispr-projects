@@ -1,0 +1,61 @@
+# Conda environment for HCC_RiboSeq_paper.ipynb (and the scripts in analysis_scripts/)
+#
+#   PYTHONNOUSERSITE=1 conda env create -f environment.hcc_riboseq_paper.yml
+#   conda activate hcc_riboseq_paper
+#
+# It contains every Python module imported by the notebook, zavolab_pyutils (its functions and the
+# command-line tools transcript_to_genomic / cds_to_transcriptomic), bedtools and the UCSC kent
+# utilities used for bigWig/bigBed handling and track hubs.
+# Not needed for Liver_lincRNA_ORFs/, which brings its own environments (see its README).
+name: hcc_riboseq_paper
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+variables:
+  # packages in ~/.local (pip install --user) would otherwise shadow the env's own packages
+  PYTHONNOUSERSITE: "1"
+dependencies:
+  # Python >= 3.12 is required: the notebook uses nested quotes inside f-strings (PEP 701);
+  # zavolab_pyutils supports Python < 3.13
+  - python=3.12
+  - pip
+  # Jupyter
+  - ipykernel
+  - ipython
+  - nbstripout
+  # data analysis and statistics
+  - numpy
+  - pandas>=2.0
+  - scipy
+  - statsmodels
+  - scikit-learn
+  # plotting (pyqt provides the Qt5Agg backend set in the first cell of the notebook)
+  - matplotlib
+  - seaborn
+  - adjusttext
+  - pyqt
+  # bioinformatics libraries
+  - htseq
+  - biopython
+  - pysam
+  - pybigwig
+  # utilities
+  - python-dotenv
+  - ruamel.yaml
+  - tomli-w
+  - wget
+  # command-line tools called from the notebook or its generated SLURM scripts
+  - bioconda::bedtools
+  - bioconda::ucsc-bigwigtobedgraph
+  - bioconda::ucsc-bedgraphtobigwig
+  - bioconda::ucsc-bigwigmerge
+  - bioconda::ucsc-bigwigaverageoverbed
+  - bioconda::ucsc-bedtobigbed
+  - bioconda::ucsc-fatotwobit
+  - bioconda::ucsc-twobitinfo
+  - bioconda::ucsc-gtftogenepred
+  - bioconda::ucsc-genepredtobiggenepred
+  - pip:
+      # zavolab_pyutils (functions + CLI tools); its compiled dependencies come from conda above
+      - git+https://github.com/zavolanlab/zavolab_pyutils.git@dev

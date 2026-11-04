@@ -1,0 +1,22 @@
+# Snakemake settings for sciCORE (used by ../run.sh). Jobs go to Slurm through plain sbatch; local rules
+# (downloads, recount3 streaming, Europe PMC) run on the login node inside the Snakemake process.
+executor: cluster-generic
+cluster-generic-submit-cmd: >-
+  mkdir -p logs/slurm/{rule} &&
+  sbatch --parsable --job-name=ld.{rule} --output=logs/slurm/{rule}/%j.log
+  --cpus-per-task={threads} --mem={resources.mem_mb} --time={resources.runtime}
+cluster-generic-cancel-cmd: scancel
+default-resources:
+  - mem_mb=8000
+  - runtime=60
+resources:
+  - govaere_download=2      # parallel Govaere downloads
+jobs: 40                    # Slurm jobs at a time
+local-cores: 8              # login-node jobs at a time
+latency-wait: 120           # seconds to wait for files on the shared file system
+retries: 1                  # one retry, with double memory and time (mem(), minutes() in the Snakefile)
+keep-going: true            # independent steps go on when one fails
+rerun-incomplete: true
+printshellcmds: true
+show-failed-logs: true
+max-status-checks-per-second: 1
