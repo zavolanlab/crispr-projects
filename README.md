@@ -4,7 +4,7 @@ This repository contains the jupyter notebook and auxiliary scripts related to t
 
 Historically, this analysis is related to CRISPR projects of the Zavolan Lab, hence it's stored in respective repository.
 
-> **Follow-up project: Liver lincRNA ORFs.** Automated de novo annotation of expressed lincRNAs in hepatic cell lines and prioritization of their translated ORFs (Ribo-seq, polysome profiling, RNA-seq, PhyloCSF), with a Nextflow pipeline and a dedicated notebook. See [Liver_lincRNA_ORFs/README.md](Liver_lincRNA_ORFs/README.md). The project is self-contained (own README, pipeline and environments), NO need to follow the instructions below if you are only interested in that follow-up project.
+> **Follow-up project: Liver lincRNA ORFs.** Automated de novo annotation of expressed lincRNAs in hepatic cell lines and prioritization of their translated ORFs (Ribo-seq, polysome profiling, RNA-seq, PhyloCSF), with a Nextflow pipeline and a dedicated notebook, followed by a second stage (`lincdisease`, Snakemake) that annotates these ORFs with disease relevance and mechanism classes. See [Liver_lincRNA_ORFs/README.md](Liver_lincRNA_ORFs/README.md). The project is self-contained (own README, pipeline and environments), NO need to follow the instructions below if you are only interested in that follow-up project.
 
 On sciCORE HPC, running jupyter notebook on a computational node is nicely enabled by [OnDemand service](https://docs.scicore.unibas.ch/HPC%20Cluster/interactivecomputing/#open-ondemand-ood).
 
@@ -19,7 +19,9 @@ On sciCORE HPC, running jupyter notebook on a computational node is nicely enabl
 ├── environment.hcc_riboseq_paper.yml   # Conda environment of the notebook (see step 3)
 ├── analysis_scripts/                    
 │   ├── compute_track_metrics.py        # python script for computing various metrics stored in external .bb or .bigwig files
-└── Liver_lincRNA_ORFs/                 # Follow-up project, self-contained (own README, pipeline and environments)
+└── Liver_lincRNA_ORFs/                 # Follow-up project, self-contained (own README, pipelines and environments)
+    ├── lincorfz/                       #   stage 1: discovery of translated lincRNA ORFs (Nextflow)
+    └── lincdisease/                    #   stage 2: disease relevance and mechanism classes (Snakemake)
 ```
 
 ## Quick Start & Setup
@@ -59,7 +61,7 @@ Use this environment (`hcc_riboseq_paper`) as the kernel of `HCC_RiboSeq_paper.i
 
 ## Liver_lincRNA_ORFs: independent of the setup above
 
-The follow-up project in [Liver_lincRNA_ORFs/](Liver_lincRNA_ORFs/README.md) does **not** need the conda environment of step 3 nor anything else installed for `HCC_RiboSeq_paper.ipynb`. Its Nextflow pipeline brings its own conda environments (`Liver_lincRNA_ORFs/lincorfz/envs/`, built with `Liver_lincRNA_ORFs/lincorfz/setup_conda_envs.sh`), and its notebook runs in one of them. The only shared piece is the `.env` file with the cluster paths (step 2): its notebook reads `Liver_projects.scicore.env` from the repository root. Follow [Liver_lincRNA_ORFs/README.md](Liver_lincRNA_ORFs/README.md) for everything else.
+The follow-up project in [Liver_lincRNA_ORFs/](Liver_lincRNA_ORFs/README.md) does **not** need the conda environment of step 3 nor anything else installed for `HCC_RiboSeq_paper.ipynb`. Its Nextflow pipeline brings its own conda environments (`Liver_lincRNA_ORFs/lincorfz/envs/`, built with `Liver_lincRNA_ORFs/lincorfz/setup_conda_envs.sh`), and its notebook runs in one of them; the same holds for its second stage, `lincdisease` (`Liver_lincRNA_ORFs/lincdisease/envs/`). The only shared piece is the `.env` file with the cluster paths (step 2): its notebook reads `Liver_projects.scicore.env` from the repository root. Follow [Liver_lincRNA_ORFs/README.md](Liver_lincRNA_ORFs/README.md) for everything else.
 
 ## Submitting the SLURM jobs and computation-heavy bash commands
 

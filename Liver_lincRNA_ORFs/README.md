@@ -4,16 +4,21 @@ This sub-project automates the search for translated ORFs in long intergenic non
 of hepatic cell lines. It replaces the manual, IGV-based pre-selection that led to the ZFAS1 and FRG1BP
 targets of the HCC Ribo-seq paper (siRNA knock-down of the lincRNA, CRISPR pgRNA excision of the ORF).
 
-The analysis consists of
+The analysis has two stages, run one after the other. Each has its own workflow, conda environments and notebook:
 
-* **`lincorfz/`**: a Nextflow (DSL2) pipeline that does all heavy computations as SLURM jobs on sciCORE,
-* **`Liver_lincRNA_ORFs.ipynb`**: the Jupyter notebook that prepares the inputs, writes the parameter
-  files, prints the `sbatch` commands and inspects/visualizes the results,
-* **`sbatch/run_lincorfz.sbatch`**: the SLURM job that runs the Nextflow driver.
-
-The disease relevance and mechanism classes of the ORFs found by lincorfz are annotated by **`lincdisease/`**
-(Python package and Snakemake workflow; specification `lincdisease/LOGIC.md`, usage
-`lincdisease/workflow/README.md`) and shown in **`Liver_lincRNA_ORFs_disease.ipynb`**.
+1. **Discovery of translated lincRNA ORFs** (this README)
+   * **`lincorfz/`**: a Nextflow (DSL2) pipeline that does all heavy computations as SLURM jobs on sciCORE,
+   * **`Liver_lincRNA_ORFs.ipynb`**: the Jupyter notebook that prepares the inputs, writes the parameter
+     files, prints the `sbatch` commands and inspects/visualizes the results,
+   * **`sbatch/run_lincorfz.sbatch`**: the SLURM job that runs the Nextflow driver.
+2. **Disease relevance and mechanism classes of these ORFs**, downstream of stage 1: it starts from a finished
+   lincorfz run (`runs/v2/results`) and does not rerun any part of it (section
+   [Stage 2](#stage-2-disease-relevance-and-mechanism-classes-lincdisease) below)
+   * **`lincdisease/`**: a Python package and Snakemake workflow, started with `lincdisease/run.sh`; how to install
+     and run it: [`lincdisease/workflow/README.md`](lincdisease/workflow/README.md); definition of every score:
+     [`lincdisease/LOGIC.md`](lincdisease/LOGIC.md),
+   * **`Liver_lincRNA_ORFs_disease.ipynb`**: the notebook that shows its results (it continues
+     `Liver_lincRNA_ORFs.ipynb`).
 
 All results are written to `${WF_RUNS_DIR}Liver_lincRNA_ORFs_Claude/`. Cluster paths are never written in this
 repository: they come from the `.env` file in the repository root (`Liver_projects.scicore.env`, not tracked by git;
@@ -23,7 +28,7 @@ set -a; source ../Liver_projects.scicore.env; set +a     # defines WF_RUNS_DIR, 
 OUT=${WF_RUNS_DIR}Liver_lincRNA_ORFs_Claude             # output directory of this project
 ```
 
-## Which conda environment runs the notebook
+## Which conda environment runs the notebooks
 
 Use the pipeline's Python environment **`lincorfz_py`** as the Jupyter kernel of `Liver_lincRNA_ORFs.ipynb`
 (not the environment of the main repository README). It is built together with the pipeline by
@@ -36,6 +41,9 @@ PYTHONNOUSERSITE=1 $OUT/conda_envs/lincorfz_py/bin/python \
 Alternatively, execute the whole notebook as a SLURM job with `sbatch/execute_notebook.sbatch` (last section of the
 notebook), which uses the same environment. The bash/`sbatch` commands printed by the notebook need the
 `nextflow` conda environment only for the pipeline driver (activated inside `sbatch/run_lincorfz.sbatch`).
+
+`Liver_lincRNA_ORFs_disease.ipynb` (stage 2) runs in the **`lincdisease`** environment instead (`$OUT/conda_envs/lincdisease`,
+see [Stage 2](#stage-2-disease-relevance-and-mechanism-classes-lincdisease)).
 
 ## What the pipeline produces
 
@@ -190,7 +198,7 @@ weights are parameters.
 `peptide.tsv` from non-tryptic small-peptidome searches), identified peptides absent from the GENCODE
 proteome are matched to the ORF sequences (I/L-equivalent). `lincORFs.faa` can be used as a search database.
 
-## How to run
+## How to run (stage 1: lincorfz)
 
 This project is self-contained: nothing from the setup of the main repository README (in particular its conda
 environment) is needed. Requirements:
@@ -229,6 +237,32 @@ environment) is needed. Requirements:
 
 The pipeline can also be run directly (`nextflow run lincorfz/main.nf -params-file params.json -profile conda`);
 see `lincorfz/nextflow.config` for all parameters and their defaults.
+
+## Stage 2: disease relevance and mechanism classes (lincdisease)
+
+`lincdisease/` annotates every ORF of a finished lincorfz run with quality flags, disease-relevance measures D1-D6
+(tumour vs normal and replication in HCC cohorts, chronic liver disease cohorts, survival, copy number, GWAS,
+literature, liver context; summarized as an HCC score and a chronic liver disease score) and mechanism classes M1-M6
+(encoded peptide, translation-coupled RNA regulation, cis regulation, nuclear and cytoplasmic trans function,
+small-RNA host). It reads the lincorfz results in place, so its root directory is the same `$OUT`, and writes to
+`$OUT/disease_mechanism/v2/`. Short version (details, troubleshooting and the environment build:
+[`lincdisease/workflow/README.md`](lincdisease/workflow/README.md)):
+
+1. **Conda environments** (once, on a login node): `lincdisease`, `lincdisease_peptide` and `snakemake` in
+   `$OUT/conda_envs/`, from the lock files in `lincdisease/envs/` (commands under "Software" in the workflow README).
+2. **Run** from `$OUT` on a login node (downloads run there, everything else is submitted to Slurm; the first run
+   downloads about 40 GB into `$OUT/lincdisease_data/` and lists any file that must be placed by hand):
+   ```bash
+   cd $OUT
+   L=<repository>/Liver_lincRNA_ORFs/lincdisease
+   $L/run.sh plan      # what would run
+   $L/run.sh start     # run in the background
+   $L/run.sh status    # progress, errors, Slurm jobs
+   ```
+3. **Inspect** the results in `Liver_lincRNA_ORFs_disease.ipynb` (kernel `lincdisease`, or executed as a Slurm job
+   by its last section). Main outputs in `$OUT/disease_mechanism/v2/`: `lincdisease.table.html` (all ORFs,
+   filterable), `lincdisease.candidates.tsv`, `lincdisease.orfs.tsv`, `controls.tsv`; the Methods are in
+   `lincdisease_Methods.docx` (made from `lincdisease/docs/methods.js`).
 
 ## Peptide evidence from HepG2 proteomics (notebook section 7.1)
 
