@@ -28,8 +28,13 @@ specification: when the logic changes, this file is edited in place (no change l
    separately as a direction (`*_direction`). Where the background is ORFs (mechanism,
    actionability), each ORF is weighted by 1 / number of ORFs of its locus, so that every locus counts once:
    locus-level features are copied to all ORFs of a locus, and loci with many ORFs would otherwise dominate.
-2. Missing data never counts as zero: a score is shrunk toward 0.5 in proportion to the weight of its missing
-   components, and is reported with its `coverage` (fraction of component weight with data).
+2. Missing data never counts as zero. A composite score is S = sum_k w_k q_k / sum_k w_k, with q_k the percentile
+   of component k, or 0.5 if it is missing; the weights w_k are fixed by hand and listed with each score (disease
+   score below, D1 and D6 in Step 3, mechanism classes in Step 4). Its `coverage` is C = sum_k w_k c_k / sum_k w_k,
+   with c_k = 1 if component k is observed, 0 if missing, and its own coverage if it is itself a composite (D1,
+   D6: a locus with D1 HCC but no D1 chronic has c_D1 = 0.7). Then S = C * S_obs + (1 - C) * 0.5, where S_obs is
+   the weighted mean of the observed percentiles: the observed evidence shrunk toward 0.5 in proportion to the
+   missing weight.
 3. Quality checks produce flags and a confidence tier; they do not remove ORFs and do not change the scores.
 4. Default weights are fixed in advance. Fitted weights (see "Weight fitting") are reported as an alternative,
    never silently substituted.

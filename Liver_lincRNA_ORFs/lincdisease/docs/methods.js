@@ -126,16 +126,32 @@ C.push(p("Where the background is ORFs (mechanism classes, actionability), backg
   "ORFs would otherwise dominate the background."));
 
 C.push(h2("2.2 Composite scores and shrinkage for missing data"));
-C.push(p("A composite of components *k* with fixed non-negative weights *w*_{k} and percentiles *p*_{k} is the " +
-  "weighted mean in which a missing component contributes the neutral value 0.5:"));
+C.push(p("**Weights.** Every score that combines several percentiles (the disease, HCC and chronic scores, the D1 " +
+  "and D6 components, the mechanism classes and actionability) is a weighted mean with weights *w*_{k} ≥ 0 that " +
+  "are set by hand before any results are computed and are listed with each score: Section 5 for the summary " +
+  "scores (for `disease_score`: D1 0.25, D2 0.25, D3 0.20, D4 0.10, D5 0.10, D6 0.10), Section 4 for D1 (D1 HCC " +
+  "0.7, D1 chronic 0.3) and D6 (three parts, equal weights), and Section 7 for the mechanism classes (all features " +
+  "of a class equal). The weights are design choices, not estimates; a data-driven alternative is fitted and " +
+  "reported separately (Section 5), never used in their place."));
+C.push(p("**Score.** With *p*_{k} the percentile of component *k* (Section 2.1), a missing component is given the " +
+  "neutral value 0.5, the percentile of a typical background locus:"));
 C.push(eq(R("S = "), F(Sum(R("k"), null, [Sub(R("w"), R("k")), Sub(R("q"), R("k"))]), Sum(R("k"), null, Sub(R("w"), R("k")))),
   R(",    "), Sub(R("q"), R("k")), R(" = "), Cur([Sub(R("p"), R("k")), R(" if observed;  0.5 if missing")])));
-C.push(p("Its **coverage** is the fraction of the weight with data, *C* = Σ_{obs} *w*_{k} / Σ *w*_{k}. Writing " +
-  "*S*_{obs} for the weighted mean over the observed components only, the composite is"));
-C.push(eq(R("S = C · "), Sub(R("S"), R("obs")), R(" + (1 − C) · 0.5")));
-C.push(p("that is, the observed evidence shrunk toward 0.5 in proportion to the missing weight. A locus without " +
-  "data therefore never scores low by default, and a score near 0.5 with low coverage means *unknown*, not " +
-  "*unremarkable*; coverage is reported with every score."));
+C.push(p("**Coverage.** *C* is the share of the total weight that has data. Each component *k* has a data " +
+  "fraction *c*_{k}: 1 if observed, 0 if missing, and, for a component that is itself a composite (D1, D6), that " +
+  "component's own coverage:"));
+C.push(eq(R("C = "), F(Sum(R("k"), null, [Sub(R("w"), R("k")), Sub(R("c"), R("k"))]), Sum(R("k"), null, Sub(R("w"), R("k"))))));
+C.push(p("For example, a locus with D1 HCC but no D1 chronic has *c*_{D1} = 0.7. Writing *S*_{obs} for the " +
+  "weighted mean of the observed percentiles alone, Equation 2 equals *S* = *C* · *S*_{obs} + (1 − *C*) · 0.5: the " +
+  "observed evidence shrunk toward 0.5 in proportion to the missing weight. (For nested components, the identity " +
+  "holds with the weights multiplied through, e.g. 0.25 × 0.7 = 0.175 for D1 HCC in `disease_score`.)"));
+C.push(p("**Worked example** (`disease_score`). A locus with percentiles D1 HCC 0.9, D2 0.7, D4 0.6 and D6 0.7, " +
+  "and no D1 chronic, D3 or D5 data: D1 = 0.7 · 0.9 + 0.3 · 0.5 = 0.78 with *c*_{D1} = 0.7; " +
+  "*S* = 0.25 · 0.78 + 0.25 · 0.7 + 0.20 · 0.5 + 0.10 · 0.6 + 0.10 · 0.5 + 0.10 · 0.7 = 0.65; " +
+  "*C* = 0.25 · 0.7 + 0.25 + 0.10 + 0.10 = 0.625. The observed percentiles alone, with weights 0.175, 0.25, " +
+  "0.10 and 0.10, average *S*_{obs} = 0.74, and 0.625 · 0.74 + 0.375 · 0.5 = 0.65."));
+C.push(p("**Reading a score.** A locus without data never scores low by default. A score near 0.5 with low " +
+  "coverage means *unknown*, not *unremarkable*, which is why coverage is reported with every score."));
 
 C.push(h2("2.3 Directions"));
 C.push(p("A direction is read from the signs of the **informative** signed components, those whose own " +
