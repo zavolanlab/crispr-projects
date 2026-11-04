@@ -173,6 +173,13 @@ C.push(p("Many loci are de novo assemblies without a GENCODE gene, so gene-level
   "coverage *T*_{j} (the summed coverage of all bases, recount3 `bc_auc.all_reads_all_bases`):"));
 C.push(eq(Sub(R("ncov"), R("fj")), R(" = "), F(Sum([R("i ∈ "), Sub(R("Q"), R("f"))], null, Sub(R("cov"), R("ij"))), [R("|"), Sub(R("Q"), R("f")), R("| · "), Sub(R("T"), R("j"))]), R(" · "), Sup(R("10"), R("9")),
   R(",    "), Sub(R("e"), R("fj")), R(" = "), Sub(R("log"), R("2")), Par([F(Sub(R("ncov"), R("fj")), Sub(R("s"), R("j"))), R(" + 0.05")])));
+C.push(p("*cov*_{ij} is the read coverage (number of aligned reads covering base *i*) in sample *j*. " +
+  "*ncov*_{fj}, the **normalized coverage** of feature *f* in sample *j*, is the mean coverage per quantifiable " +
+  "base divided by the total coverage of the sample. Since the total coverage is the number of reads times the " +
+  "read length, *ncov* equals reads per kilobase of quantifiable positions per million reads (RPKM), with each " +
+  "read counted by the share of its bases inside *Q*_{f}. *e*_{fj} is the **expression value** used by every " +
+  "statistic: *ncov* divided by the size factor *s*_{j} of the sample (below), plus a pseudocount of 0.05 so that " +
+  "zero coverage stays finite, on the log2 scale."));
 C.push(p("**Size factors.** Dividing by the total coverage alone would let the few hepatocyte transcripts that " +
   "dominate liver RNA (ALB, APOA1, …) set the scale; their share falls in tumours and in injured liver, which " +
   "lifts every other transcript. *ncov* is therefore divided by median-of-ratios size factors *s*_{j}, computed " +
