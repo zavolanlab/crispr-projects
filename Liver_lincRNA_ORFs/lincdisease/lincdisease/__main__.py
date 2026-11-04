@@ -597,12 +597,12 @@ def cmd_report(args):
 
 
 def cmd_html(args):
-    """lincdisease.table.html: candidates and screen-supported ORFs, sortable, summary scores first."""
+    """lincdisease.table.html: all ORFs with their category, sortable, summary scores first."""
     def t(name, **kw):
         return read(args.out_dir, name, low_memory=False, **kw)
     rows = table_html.rows(t("lincdisease.orfs.tsv"), t("support.orfs.tsv"), t("mechanism.orfs.tsv"),
                            t("disease.loci.tsv", index_col=0), t("peptides.orfs.tsv", index_col=0),
-                           t("hla.orfs.tsv", index_col=0))
+                           t("hla.orfs.tsv", index_col=0), of_interest=args.of_interest)
     path = os.path.join(args.out_dir, "lincdisease.table.html")
     with open(path, "w") as fh:
         fh.write(table_html.build(rows))
@@ -772,7 +772,9 @@ def main():
     _run_inputs(s)
     s.set_defaults(func=cmd_report)
 
-    s = sub.add_parser("html", help="Outputs: sortable HTML table of the candidates and screen-supported ORFs")
+    s = sub.add_parser("html", help="Outputs: sortable HTML table of all ORFs, coloured by category")
+    s.add_argument("--of-interest", nargs="*", default=[], metavar="PATTERN",
+                   help="locus names (patterns like FRG1*, any case) shown as the 'of interest' category")
     s.set_defaults(func=cmd_html)
 
     args = p.parse_args()

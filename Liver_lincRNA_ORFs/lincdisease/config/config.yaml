@@ -22,6 +22,10 @@ tool_env: conda_envs/lincdisease_peptide
 quant_workers: 6
 quant_sra_workers: 4
 
+# HTML table: loci shown as the "of interest" category (locus-name patterns, any case)
+html:
+  of_interest: [ZFAS1, "FRG1*"]
+
 govaere:
   runs: config/govaere_runs.tsv            # ENA run table of PRJNA558102 (relative to the lincdisease directory)
   dir: external_data/govaere2020

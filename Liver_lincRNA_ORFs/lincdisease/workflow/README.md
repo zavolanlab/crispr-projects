@@ -55,7 +55,7 @@ after adding a resource) and the recount3 streaming (`quant*`, which resumes whe
 cannot change an expensive step's result (homology, peptide), `run.sh adopt <their outputs>` marks them up to
 date instead of rerunning them.
 
-Final outputs in the output directory: `lincdisease.table.html` (candidates and screen-supported ORFs, sortable,
+Final outputs in the output directory: `lincdisease.table.html` (all ORFs by category: candidate, of interest, screen, other; sortable,
 with an index of the scores), `lincdisease.candidates.tsv`, `lincdisease.orfs.tsv`,
 `lincdisease.screen_supported.tsv`, `controls.tsv`. Identifiers and column prefixes are explained under "Outputs"
 in `../LOGIC.md`.

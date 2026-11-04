@@ -19,10 +19,12 @@ def _tables():
     return orfs, support, mech, disease, peptides, hla
 
 
-def test_rows_union_and_sets():
+def test_rows_all_orfs_with_categories():
     t = table_html.rows(*_tables())
-    assert list(t["orf_id"]) == ["b", "a"]           # candidates + screen value >= 1, by disease score w/o D5
-    assert t.set_index("orf_id")["set"].to_dict() == {"a": "candidate", "b": "screen"}
+    assert list(t["orf_id"]) == ["b", "a", "c"]      # every ORF, by disease score w/o D5 (missing last)
+    assert t.set_index("orf_id")["category"].to_dict() == {"a": "candidate", "b": "screen", "c": "other"}
+    t = table_html.rows(*_tables(), of_interest=["x", "Y*"])   # patterns, any case; candidate comes first
+    assert t.set_index("orf_id")["category"].to_dict() == {"a": "candidate", "b": "of interest", "c": "of interest"}
     assert t.set_index("orf_id").loc["b", "stat_D3"] == 0.2 and "pct_m2_nmd" in t
 
 
@@ -33,4 +35,4 @@ def test_build_orders_summary_before_detail_and_encodes_missing():
     data = json.loads(page.split("const DATA = ")[1].split(";\n")[0])
     cols = [m["col"] for m in meta]
     assert cols.index("hcc_score") < cols.index("chronic_score") < cols.index("stat_D3") < cols.index("pct_m2_nmd")
-    assert len(data) == 2 and None in data[1]          # NaN becomes null, not NaN (valid JSON)
+    assert len(data) == 3 and None in data[2]          # NaN becomes null, not NaN (valid JSON)

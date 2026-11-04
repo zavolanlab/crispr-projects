@@ -1,8 +1,13 @@
 """
-Self-contained HTML table of the candidate and screen-supported ORFs (`lincdisease.table.html`): sortable columns
-ordered from the summary scores to the detail, column groups that can be hidden, a filter by set, and an index
-of the summary scores, D1-D6 and M1-M6. No external resources.
+Self-contained HTML table of all ORFs of the run (`lincdisease.table.html`): sortable columns ordered from the
+summary scores to the detail, column groups that can be hidden, a filter by category, and an index of the summary
+scores, D1-D6 and M1-M6. No external resources.
+
+Category of an ORF (column and row colour), first that applies: candidate (the candidate table of the run),
+of interest (locus name matches a pattern of the `html.of_interest` config list, e.g. FRG1*), screen (CRISPR
+screen value >= 1), other.
 """
+import fnmatch
 import html
 import json
 
@@ -13,7 +18,9 @@ import pandas as pd
 COLUMNS = [
     ("ORF", "locus_name", "Locus", "text", "lincRNA locus (gene symbol, Ensembl or StringTie id)"),
     ("ORF", "orf_label", "ORF", "text", "ORF label from lincorfz"),
-    ("ORF", "set", "Set", "text", "candidate (curated list of 46 ORFs), screen (CRISPR screen value >= 1), or both"),
+    ("ORF", "category", "Category", "text",
+     "candidate (candidate table of the run), of interest (locus listed in the html.of_interest config), "
+     "screen (CRISPR screen value >= 1), other; first that applies"),
     ("ORF", "confidence_tier", "QC tier", "text",
      "clean / caution / expressed_paralog / likely_artefact (Methods 6)"),
     ("ORF", "n_aa", "Length (aa)", "int", "ORF length in amino acids"),
@@ -210,18 +217,27 @@ INDEX = [
 ]
 
 
-def rows(orfs, support, mechanism, disease, peptides, hla, min_screen=1):
-    """Candidates and screen-supported ORFs (screen value >= min_screen) with all COLUMNS."""
+CATEGORIES = ("candidate", "of interest", "screen", "other")
+
+
+def category(t, of_interest=(), min_screen=1):
+    """Category per ORF (CATEGORIES, first that applies); `of_interest`: locus name patterns (fnmatch, any case)."""
+    names = t["locus_name"].astype(str).str.upper()
+    interest = names.map(lambda n: any(fnmatch.fnmatchcase(n, pat.upper()) for pat in of_interest))
+    conditions = [t["is_candidate"].astype(bool), interest, t["crispr_screen_value"].ge(min_screen)]
+    return pd.Series(np.select(conditions, CATEGORIES[:3], CATEGORIES[3]), index=t.index)
+
+
+def rows(orfs, support, mechanism, disease, peptides, hla, of_interest=(), min_screen=1):
+    """All ORFs with all COLUMNS and their category, by disease score without D5."""
     t = orfs.set_index("orf_id", drop=False)
     t = t.join(support.set_index("orf_id"), how="left", suffixes=("", "_support"))
     t = t.join(mechanism.set_index("orf_id")[[c for c in mechanism.columns if c.startswith("pct_") and c not in t]])
     t = t.join(peptides[["n_specific_peptides", "n_hla_specific"]]).join(hla[["hla_any_n_binders"]])
     locus_cols = [c for c in ("stat_D3", "cn_rho", "cn_fdr", "cn_gain_freq", "cn_loss_freq") if c in disease]
     t = t.join(disease[locus_cols], on="locus_id").copy()          # copy: the joins leave a fragmented frame
-    cand = t["is_candidate"].astype(bool)
-    screen = t["crispr_screen_value"].ge(min_screen)
-    t["set"] = np.select([cand & screen, cand], ["both", "candidate"], "screen")
-    return t[cand | screen].sort_values("disease_score_noD5", ascending=False)
+    t["category"] = category(t, of_interest, min_screen)
+    return t.sort_values("disease_score_noD5", ascending=False)
 
 
 def _value(v, kind):
@@ -232,13 +248,13 @@ def _value(v, kind):
         return bool(v) if not isinstance(v, str) else v == "True"
     if kind in ("score", "num", "p", "int"):
         try:
-            return float(v)
+            return float(f"{float(v):.4g}")       # 4 significant digits: the page shows at most 3
         except (TypeError, ValueError):
             return None
     return str(v)
 
 
-def build(table, title="lincdisease: candidate and screen-supported ORFs", note=""):
+def build(table, title="lincdisease: lincRNA ORFs", note=""):
     """The HTML page: COLUMNS present in `table` (rows()), the INDEX and the summary line filled into TEMPLATE."""
     cols = [c for c in COLUMNS if c[1] in table.columns]
     data = [[_value(r[c[1]], c[3]) for c in cols] for _, r in table.iterrows()]
@@ -247,10 +263,8 @@ def build(table, title="lincdisease: candidate and screen-supported ORFs", note=
         f"<section><h3>{html.escape(h)}</h3><dl>"
         + "".join(f"<dt>{html.escape(a)}</dt><dd>{html.escape(b)}</dd>" for a, b in items)
         + "</dl></section>" for h, items in INDEX)
-    counts = table["set"].value_counts().to_dict()
-    summary = (f"{len(table)} ORFs: {counts.get('candidate', 0) + counts.get('both', 0)} candidates, "
-               f"{counts.get('screen', 0) + counts.get('both', 0)} with a CRISPR screen phenotype "
-               f"({counts.get('both', 0)} both).")
+    counts = table["category"].value_counts()
+    summary = f"{len(table)} ORFs: " + ", ".join(f"{counts.get(c, 0)} {c}" for c in CATEGORIES) + "."
     return (TEMPLATE.replace("__TITLE__", html.escape(title))
             .replace("__SUMMARY__", html.escape(summary + (" " + note if note else "")))
             .replace("__INDEX__", index_html)
@@ -268,16 +282,19 @@ TEMPLATE = r"""<!doctype html>
 :root {
   --bg: #ffffff; --fg: #1d2430; --muted: #5d6878; --line: #d9dee5; --head: #f2f5f8; --head2: #e6ebf1;
   --accent: #2e5a88; --hover: #f7f9fb; --chip: #eef2f6; --heat: 46, 110, 170;
+  --cat-candidate: #f6c9c4; --cat-interest: #fbd9a8; --cat-screen: #c7dcf3;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #14181e; --fg: #e3e8ee; --muted: #9aa5b3; --line: #2c333d; --head: #1c222a; --head2: #232a33;
     --accent: #8db7e2; --hover: #1a2027; --chip: #232a33; --heat: 96, 160, 225;
+    --cat-candidate: #6b2a25; --cat-interest: #6b4515; --cat-screen: #1f3d5e;
   }
 }
 :root[data-theme="dark"] {
   --bg: #14181e; --fg: #e3e8ee; --muted: #9aa5b3; --line: #2c333d; --head: #1c222a; --head2: #232a33;
   --accent: #8db7e2; --hover: #1a2027; --chip: #232a33; --heat: 96, 160, 225;
+  --cat-candidate: #6b2a25; --cat-interest: #6b4515; --cat-screen: #1f3d5e;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg);
@@ -323,6 +340,11 @@ td.n { text-align: right; font-variant-numeric: tabular-nums; }
 td.na { color: var(--muted); text-align: center; }
 td.score { text-align: right; font-variant-numeric: tabular-nums; }
 .chip { background: var(--chip); border-radius: 10px; padding: 1px 7px; font-size: 12px; }
+tr.cat-candidate td.id { background: var(--cat-candidate); }
+tr.cat-interest td.id { background: var(--cat-interest); }
+tr.cat-screen td.id { background: var(--cat-screen); }
+.legend span { display: inline-block; padding: 1px 8px; border-radius: 4px; margin-right: 4px; }
+.more { margin: 8px 16px; }
 footer { color: var(--muted); font-size: 12px; margin: 10px 0 20px; }
 @media (max-width: 600px) { .index { grid-template-columns: 1fr; } .group-list { column-count: 1; } }
 </style>
@@ -335,22 +357,29 @@ footer { color: var(--muted); font-size: 12px; margin: 10px 0 20px; }
 <details class="index-box"><summary>Index: summary scores, D1-D6, M1-M6</summary><div class="index">__INDEX__</div></details>
 <div class="controls">
   <div class="seg" id="sets">
-    <button data-set="all" class="on">All</button><button data-set="candidate">Candidates</button><button data-set="screen">Screen-supported</button>
+    <button data-set="all" class="on">All</button><button data-set="candidate">Candidate</button><button data-set="of interest">Of interest</button><button data-set="screen">Screen</button><button data-set="other">Other</button>
   </div>
+  <span class="legend"><span style="background: var(--cat-candidate)">candidate</span><span style="background: var(--cat-interest)">of interest</span><span style="background: var(--cat-screen)">screen</span><span style="border: 1px solid var(--line)">other</span></span>
   <input type="search" id="q" placeholder="Search locus, ORF, trait...">
   <details class="groups"><summary>Column groups</summary><div class="group-list" id="groups"></div></details>
   <span class="summary" id="shown"></span>
 </div>
 <div class="wrap"><table id="t"><thead></thead><tbody></tbody></table></div>
+<div class="more"><button id="more" type="button">Show more rows</button></div>
 <footer>Click a column header to sort (again to reverse); hover a header for its definition. Score columns are
-percentiles against the background (0.5 = typical lincRNA) and are shaded by value. Missing values: &ndash;.</footer>
+percentiles against the background (0.5 = typical lincRNA) and are shaded by value. Missing values: &ndash;. The
+locus, ORF and category cells are coloured by category. Rows are shown 500 at a time.</footer>
 <script>
 const META = __META__;
 const DATA = __DATA__;
 const groups = [...new Set(META.map(m => m.group))];
 const hidden = new Set(["Mechanism z", "Mechanism features (percentiles)", "QC detail", "Identifiers"]);
 let sortCol = META.findIndex(m => m.col === "disease_score_noD5"), sortDir = -1, setFilter = "all", query = "";
-const setIdx = META.findIndex(m => m.col === "set");
+const setIdx = META.findIndex(m => m.col === "category");
+const ID_COLS = new Set(["locus_name", "orf_label", "category"]);
+const CAT_CLASS = {"candidate": "cat-candidate", "of interest": "cat-interest", "screen": "cat-screen"};
+const PAGE = 500;
+let limit = PAGE;
 
 function fmt(v, kind) {
   if (v === null) return "–";
@@ -384,7 +413,7 @@ function render() {
     render();
   });
   const q = query.toLowerCase();
-  let rows = DATA.filter(r => (setFilter === "all" || r[setIdx] === setFilter || r[setIdx] === "both") &&
+  let rows = DATA.filter(r => (setFilter === "all" || r[setIdx] === setFilter) &&
     (!q || r.some(v => v !== null && String(v).toLowerCase().includes(q))));
   rows.sort((a, b) => {
     const x = a[sortCol], y = b[sortCol];
@@ -392,24 +421,28 @@ function render() {
     return (x < y ? -1 : x > y ? 1 : 0) * sortDir;
   });
   const heat = getComputedStyle(document.documentElement).getPropertyValue("--heat").trim();
-  document.querySelector("#t tbody").innerHTML = rows.map(r => "<tr>" + cols.map((i, k) => {
-    const m = META[i], v = r[i], first = k === 0 ? " first" : "";
+  const total = rows.length;
+  rows = rows.slice(0, limit);
+  document.querySelector("#t tbody").innerHTML = rows.map(r => `<tr class="${CAT_CLASS[r[setIdx]] || ""}">` + cols.map((i, k) => {
+    const m = META[i], v = r[i], first = (k === 0 ? " first" : "") + (ID_COLS.has(m.col) ? " id" : "");
     if (v === null) return `<td class="na${first}">–</td>`;
     if (m.kind === "score") return `<td class="score${first}" style="background: rgba(${heat}, ${(Math.max(0, Math.min(1, v)) * 0.45).toFixed(3)})">${fmt(v, m.kind)}</td>`;
-    if (m.col === "set") return `<td class="${first}"><span class="chip">${v}</span></td>`;
+    if (m.col === "category") return `<td class="${first}">${v}</td>`;
     const cls = m.kind === "text" ? "" : "n";
     return `<td class="${cls}${first}">${fmt(v, m.kind)}</td>`;
   }).join("") + "</tr>").join("");
-  document.getElementById("shown").textContent = `${rows.length} of ${DATA.length} ORFs shown`;
+  document.getElementById("shown").textContent = `${rows.length} of ${total} matching ORFs shown (${DATA.length} in total)`;
+  document.getElementById("more").style.display = total > rows.length ? "" : "none";
 }
+document.getElementById("more").onclick = () => { limit += PAGE; render(); };
 document.getElementById("groups").innerHTML = groups.map(g =>
   `<label><input type="checkbox" data-g="${g}"${hidden.has(g) ? "" : " checked"}${g === "ORF" ? " disabled" : ""}> ${g}</label>`).join("");
 document.querySelectorAll("#groups input").forEach(cb => cb.onchange = () => {
   cb.checked ? hidden.delete(cb.dataset.g) : hidden.add(cb.dataset.g); render(); });
 document.querySelectorAll("#sets button").forEach(b => b.onclick = () => {
   document.querySelectorAll("#sets button").forEach(x => x.classList.remove("on")); b.classList.add("on");
-  setFilter = b.dataset.set; render(); });
-document.getElementById("q").oninput = e => { query = e.target.value; render(); };
+  setFilter = b.dataset.set; limit = PAGE; render(); });
+document.getElementById("q").oninput = e => { query = e.target.value; limit = PAGE; render(); };
 render();
 </script>
 </body>

@@ -9,6 +9,7 @@ __main__.py) change. Exceptions: the downloads (`fetch`) and the recount3 stream
 NEEDS_FETCH and the quant rules).
 """
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -327,11 +328,11 @@ rule report:
 
 
 rule html:
-    """Sortable HTML table of the candidates and screen-supported ORFs (summary scores first, detail last)."""
+    """Sortable HTML table of all ORFs, coloured by category (summary scores first, detail last)."""
     input: "lincdisease.orfs.tsv", "support.orfs.tsv", "mechanism.orfs.tsv", "disease.loci.tsv", "peptides.orfs.tsv",
            "hla.orfs.tsv"
-    params: code=code("html", "table_html")
     output: "lincdisease.table.html"
     resources: mem_mb=mem(8), runtime=minutes(30)
     log: "logs/html.log"
-    shell: "{LD} html > {log} 2>&1"
+    params: code=code("html", "table_html"), of_interest=" ".join(shlex.quote(x) for x in config.get("html", {}).get("of_interest", []))
+    shell: "{LD} html --of-interest {params.of_interest} > {log} 2>&1"

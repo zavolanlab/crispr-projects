@@ -384,7 +384,7 @@ Column prefixes: `stat_<X>` the statistic of component X, `pct_<X>` its percenti
 feature before ranking, `M<k>_score` / `M<k>_coverage` / `M<k>_z` the class score, its coverage and its
 standardized score (`length_bin`, `expression_bin` the bins they were ranked in), `*_direction` the sign summary, `*_cell` statistics adjusted for cell-type markers, `<cohort>_r`
 / `_p` / `_n` per-cohort statistics.
-Browsable table: `lincdisease.table.html` (candidates and screen-supported ORFs; sortable; summary scores
+Browsable table: `lincdisease.table.html` (all ORFs, coloured and filterable by category: candidate, of interest (config `html.of_interest`), screen, other; sortable; summary scores
 first, then D1-D6, M1-M6 and the detail; with an index of the scores). Methods with the derivations of every
 metric: `docs/methods.js` (builds `lincdisease_Methods.docx`). Location: `out_dir` of `config/config.yaml`,
 relative to the root directory given at run time.
